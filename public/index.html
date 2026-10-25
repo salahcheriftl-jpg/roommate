@@ -35,7 +35,7 @@
            background: rgba(255,255,255,.8); z-index: 4; display: none; pointer-events: none; }
   .prompt { position: fixed; left: 50%; transform: translateX(-50%); padding: 4px 12px; font-size: 13px; letter-spacing: 1px;
             background: rgba(0,0,0,.65); border: 1px solid var(--line); border-radius: 3px; display: none; z-index: 4; pointer-events: none; }
-  #prompt { bottom: 60px; } #prompt2 { bottom: 96px; }
+  #prompt { bottom: 60px; } #prompt2 { bottom: 96px; } #prompt3 { bottom: 132px; }
   #help { position: fixed; left: 50%; top: 56px; transform: translateX(-50%); z-index: 4; pointer-events: none; font-size: 12px; color: var(--dim);
           letter-spacing: 1px; opacity: 0; transition: opacity 1.2s; text-align: center; width: 90%; }
   #help.show { opacity: 1; }
@@ -147,6 +147,7 @@
   <span class="grow"></span>
   <button id="lightBtn" class="btn">Light: ON (F)</button>
   <button id="tvBtn" class="btn">TV (E)</button>
+  <button id="sitBtn" class="btn">Sit (G)</button>
   <button id="chatBtn" class="btn">Chat (T)</button>
 </div>
 <div id="help"></div>
@@ -193,6 +194,7 @@
 <div id="cross"></div>
 <div id="prompt" class="prompt">E: TV controls</div>
 <div id="prompt2" class="prompt">F: light switch (or click it)</div>
+<div id="prompt3" class="prompt">G: sit down</div>
 <div id="tv"><div id="yt"></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -944,6 +946,29 @@ screen.renderOrder = -1;
 scene.add(screen);
 const tvPick = [tvBody, screen];
 
+// ---------- two chairs, side by side, close enough to the TV ----------
+const CHAIRS = [{ x: -0.36, z: -3.0 }, { x: 0.36, z: -3.0 }]; // seat height 0.36, facing the TV (-z)
+(function buildChairs() {
+  const metal = new THREE.MeshStandardMaterial({ color: 0x5d656c, roughness: 0.5, metalness: 0.5 });
+  const vinyl = new THREE.MeshStandardMaterial({ map: fabricTex(31, '#4a544f', 10), roughness: 0.65 });
+  const gSeat = new THREE.BoxGeometry(0.5, 0.06, 0.48), gBack = new THREE.BoxGeometry(0.5, 0.46, 0.05);
+  const gLeg = new THREE.CylinderGeometry(0.018, 0.018, 0.34, 6), gPost = new THREE.CylinderGeometry(0.018, 0.018, 0.5, 6), gBar = new THREE.CylinderGeometry(0.014, 0.014, 0.4, 6);
+  for (const c of CHAIRS) {
+    const g = new THREE.Group(); g.position.set(c.x, 0, c.z);
+    const seat = new THREE.Mesh(gSeat, vinyl); seat.position.y = 0.33;
+    const back = new THREE.Mesh(gBack, vinyl); back.position.set(0, 0.62, 0.235); back.rotation.x = 0.1; // reclined a little
+    g.add(seat, back);
+    for (const lx of [-0.22, 0.22]) {
+      for (const lz of [-0.2, 0.2]) { const l = new THREE.Mesh(gLeg, metal); l.position.set(lx, 0.17, lz); g.add(l); }
+      const post = new THREE.Mesh(gPost, metal); post.position.set(lx, 0.6, 0.225); post.rotation.x = 0.1; g.add(post);
+      const bar = new THREE.Mesh(gBar, metal); bar.rotation.x = Math.PI / 2; bar.position.set(lx, 0.1, 0); g.add(bar);
+    }
+    g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    scene.add(g);
+  }
+})();
+
+
 // ---------- players: gaunt, hollow-eyed patients ----------
 function shadowTexture() {
   const c = mkCanvas(64, 64), g = c.getContext('2d');
@@ -974,11 +999,14 @@ const PM = {
   dark: new THREE.MeshBasicMaterial({ color: 0x020203 }),
   thread: new THREE.MeshBasicMaterial({ color: 0x0d0d0e }),
   band: new THREE.MeshStandardMaterial({ color: 0xaaa490, roughness: 1, emissive: 0x15140f }),
+  hair: new THREE.MeshStandardMaterial({ color: 0x0c0b0a, roughness: 1 }),
+  shade: new THREE.MeshStandardMaterial({ color: 0x6b7068, roughness: 1 }),
+  mask: new THREE.MeshStandardMaterial({ color: 0xd9d6cb, roughness: 0.45, emissive: 0x14130f }),
   sack: new THREE.MeshStandardMaterial({ color: 0x7e6b4d, roughness: 1, emissive: 0x120d08 }),
   shadow: new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false })
 };
 
-// variant 0 = hollow (black sockets, stitched grin) | 1 = sack head | 2 = bandaged
+// variant 0 = hollow (sockets, stitched grin, lank hair) | 1 = sack head | 2 = bandaged | 3 = cracked porcelain smile mask
 function makePlayer(color, variant = 0) {
   const g = new THREE.Group(), rig = new THREE.Group();
   const col = new THREE.Color(color);
@@ -1000,22 +1028,37 @@ function makePlayer(color, variant = 0) {
   const head = new THREE.Group(); head.position.set(0, 1.6, 0.03); rig.add(head);
   const sack = variant === 1;
   const sx = sack ? 0.2 : 0.185, sy = sack ? 0.28 : 0.26, sz = sack ? 0.22 : 0.205;
-  add(PG.sph, sack ? PM.sack : PM.skin, 0, 0.17, 0.02, sx, sy, sz, head);
+  add(PG.sph, sack ? PM.sack : variant === 3 ? PM.mask : PM.skin, 0, 0.17, 0.02, sx, sy, sz, head);
   const fz = (x, y) => 0.02 + sz * Math.sqrt(Math.max(0.02, 1 - (x / sx) * (x / sx) - ((y - 0.17) / sy) * ((y - 0.17) / sy))) + 0.004; // face surface depth
-  const eyes = [];
+  const eyes = [], hairG = new THREE.Group(); head.add(hairG);
   const hole = (x) => {
     add(PG.sph, PM.dark, x, 0.2, fz(x, 0.2) - 0.012, 0.052, 0.068, 0.03, head);
     const eg = new THREE.Group(); eg.position.set(x, 0.2, fz(x, 0.2) + 0.012);
     add(PG.sph, glowMat, 0, 0, 0, 0.016, 0.02, 0.012, eg); head.add(eg); eyes.push(eg);
   };
+  if (variant === 0 || variant === 2) for (const sgn of [-1, 1]) add(PG.sph, PM.shade, sgn * 0.088, 0.085, fz(sgn * 0.088, 0.085) - 0.012, 0.045, 0.06, 0.02, head); // sunken cheeks
   if (variant === 0) {
     hole(-0.075); hole(0.075);
+    for (let i = 0; i < 16; i++) { // long lank hair, parted over the face
+      const th = (i / 16) * Math.PI * 2; if (Math.abs(Math.atan2(Math.sin(th), Math.cos(th))) < 0.55) continue;
+      const L = 0.3 + hash(i * 3.3) * 0.16, rx = 0.152, rz = 0.168;
+      const s = add(PG.box, PM.hair, Math.sin(th) * (rx + 0.01), 0.3 - L / 2, 0.02 + Math.cos(th) * (rz + 0.01), 0.026, L, 0.008, hairG);
+      s.rotation.y = th; s.rotation.z = Math.sin(th) * 0.06;
+    }
     add(PG.box, PM.dark, 0, 0.115, fz(0, 0.115), 0.012, 0.05, 0.01, head);
     for (let i = -3; i <= 3; i++) { // wide stitched grin
       const x = i * 0.026, y = 0.035 + Math.pow(x / 0.1, 2) * 0.03;
       add(PG.box, PM.dark, x, y, fz(x, y), 0.03, 0.012, 0.008, head);
       add(PG.box, PM.thread, x, y, fz(x, y) + 0.003, 0.005, 0.06, 0.006, head);
     }
+  } else if (variant === 3) { // porcelain mask: tiny pinhole eyes, painted smile, cracks, tear streaks
+    hole(-0.07); hole(0.07);
+    for (let i = -4; i <= 4; i++) { const x = i * 0.02, y = 0.05 + Math.pow(x / 0.09, 2) * 0.05;
+      add(PG.box, PM.dark, x, y, fz(x, y), 0.022, 0.011, 0.006, head).rotation.z = Math.atan(12.3 * x); }
+    add(PG.sph, PM.dark, 0, 0.12, fz(0, 0.12), 0.01, 0.012, 0.006, head);
+    for (const [cx, cy, len, rot] of [[0.05, 0.34, 0.1, 0.4], [-0.09, 0.3, 0.08, -0.5], [0.1, 0.27, 0.07, 0.2]])
+      add(PG.box, PM.dark, cx, cy, fz(cx, cy) + 0.002, 0.004, len, 0.004, head).rotation.z = rot;
+    for (const sgn of [-1, 1]) add(PG.box, PM.stain, sgn * 0.07, 0.1, fz(sgn * 0.07, 0.1) + 0.002, 0.008, 0.13, 0.004, head);
   } else if (variant === 1) {
     hole(0.075);
     for (const a of [0.8, -0.8]) add(PG.box, PM.thread, -0.075, 0.2, fz(-0.075, 0.2) + 0.004, 0.07, 0.01, 0.006, head).rotation.z = a; // stitched-X eye
@@ -1040,7 +1083,7 @@ function makePlayer(color, variant = 0) {
     add(PG.cyl, PM.gown, 0, -0.07, 0, 0.055, 0.22, 0.055, p);
     add(PG.cyl, PM.skin, 0, -0.45, 0, 0.03, 0.62, 0.03, p);
     add(PG.sph, PM.skin, 0, -0.78, 0, 0.04, 0.07, 0.025, p);
-    for (const fx of [-0.02, 0, 0.02]) add(PG.cyl, PM.skin, fx, -0.87, 0, 0.006, 0.09, 0.006, p).rotation.z = fx * 6;
+    for (const fx of [-0.024, -0.008, 0.008, 0.024]) { const f = add(PG.cyl, PM.skin, fx, -0.9, 0.012, 0.006, 0.12, 0.006, p); f.rotation.z = fx * 5; f.rotation.x = 0.18; } // long curled fingers
     if (right) add(PG.ring, bandMat, 0, -0.7, 0, 0.04, 0.04, 0.2, p).rotation.x = Math.PI / 2;
     return p;
   };
@@ -1049,8 +1092,11 @@ function makePlayer(color, variant = 0) {
   // bare, bony legs
   const mkLeg = (x) => {
     const p = new THREE.Group(); p.position.set(x, 0.56, 0); rig.add(p);
-    add(PG.cyl, PM.skin, 0, -0.28, 0, 0.045, 0.56, 0.045, p);
-    add(PG.sph, PM.skin, 0, -0.55, 0.04, 0.05, 0.03, 0.1, p);
+    add(PG.cyl, PM.skin, 0, -0.14, 0, 0.048, 0.28, 0.048, p);          // thigh
+    const k = new THREE.Group(); k.position.y = -0.28; p.add(k); p.userData.knee = k;
+    add(PG.sph, PM.skin, 0, 0, 0, 0.05, 0.05, 0.05, k);                // knobbly knee
+    add(PG.cyl, PM.skin, 0, -0.14, 0, 0.04, 0.28, 0.04, k);            // shin
+    add(PG.sph, PM.skin, 0, -0.28, 0.04, 0.05, 0.03, 0.1, k);          // foot
     return p;
   };
   const footL = mkLeg(-0.12), footR = mkLeg(0.12);
@@ -1060,26 +1106,37 @@ function makePlayer(color, variant = 0) {
 
   const sh = new THREE.Mesh(PG.shadow, PM.shadow); sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; g.add(sh); // cheap contact shadow
   g.add(rig);
-  g.userData = { rig, head, armL, armR, footL, footR, eyes, tail, glowMat, glowBase, phase: Math.random() * 10, bubble: null, css: '#' + col.getHexString() };
+  g.userData = { rig, head, hair: hairG, armL, armR, footL, footR, eyes, tail, glowMat, glowBase, phase: Math.random() * 10, bubble: null, sit: 0, lastT: 0, css: '#' + col.getHexString() };
   scene.add(g);
   return g;
 }
 
-function animateChar(g, moving, t) {
+function animateChar(g, moving, t, seated) {
   const u = g.userData; if (!u.rig) return;
+  const dts = Math.min(0.1, Math.max(0, t - (u.lastT || t))); u.lastT = t;
+  u.sit += ((seated ? 1 : 0) - u.sit) * Math.min(1, dts * 7); // eases into / out of the chair
+  const sit = u.sit, up = 1 - sit;
+  if (seated) moving = false;
   const ph = t * 6.5 + u.phase, sw = moving ? Math.sin(ph) : 0, br = Math.sin(t * 1.3 + u.phase);
-  u.rig.position.y = moving ? Math.abs(Math.sin(ph)) * 0.025 : br * 0.006;      // slow shuffle / shallow breathing
-  u.rig.rotation.x = moving ? 0.16 : 0.07 + br * 0.01;                          // hunched, leaning forward
-  u.rig.rotation.z = moving ? Math.sin(ph) * 0.05 : Math.sin(t * 0.4 + u.phase) * 0.015;
-  u.footL.rotation.x = sw * 0.5; u.footR.rotation.x = -sw * 0.5;
+  u.rig.position.y = ((moving ? Math.abs(Math.sin(ph)) * 0.025 : br * 0.006)) * up - 0.2 * sit;
+  u.rig.rotation.x = (moving ? 0.16 : 0.07 + br * 0.01) * up + 0.1 * sit;     // hunched, leaning forward
+  u.rig.rotation.z = (moving ? Math.sin(ph) * 0.05 : Math.sin(t * 0.4 + u.phase) * 0.015) * up;
+  // legs: hip + knee. Walking = slow shuffle, sitting = thighs forward, shins down
+  u.footL.rotation.x = sw * 0.5 * up - 1.5 * sit;
+  u.footR.rotation.x = -sw * 0.5 * up - 1.5 * sit;
+  u.footL.userData.knee.rotation.x = Math.max(0, sw * 0.5) * 0.9 * up + 1.5 * sit;
+  u.footR.userData.knee.rotation.x = Math.max(0, -sw * 0.5) * 0.9 * up + 1.5 * sit;
   const sway = Math.sin(t * 0.9 + u.phase) * 0.02;
-  u.armL.rotation.x = 0.12 - sw * 0.18; u.armR.rotation.x = 0.12 + sw * 0.18;
+  const k = Math.floor(t * 5 + u.phase * 3), tw = hash(k + u.phase) > 0.94 ? 1 : 0;   // twitch moments
+  u.armL.rotation.x = (0.12 - sw * 0.18) * up - 0.5 * sit;
+  u.armR.rotation.x = (0.12 + sw * 0.18) * up - 0.5 * sit + tw * (hash(k * 3.1) - 0.5) * 0.4;
   u.armL.rotation.z = -0.08 - sway; u.armR.rotation.z = 0.08 + sway;
-  // head drifts slowly, then every so often snaps sideways
-  const k = Math.floor(t * 5 + u.phase * 3), tw = hash(k + u.phase) > 0.94 ? 1 : 0;
+  // head drifts slowly, then every so often snaps sideways; tips back to stare at the TV when seated
   u.head.rotation.z = 0.16 + Math.sin(t * 0.6 + u.phase) * 0.05 + tw * (hash(k * 1.7) - 0.5) * 0.5;
-  u.head.rotation.y = Math.sin(t * 0.35 + u.phase) * (moving ? 0.1 : 0.25) + tw * (hash(k * 2.3) - 0.5) * 0.9;
-  u.head.rotation.x = -0.06 + Math.sin(t * 0.5 + u.phase) * 0.03;
+  u.head.rotation.y = Math.sin(t * 0.35 + u.phase) * (moving ? 0.1 : 0.25 - 0.15 * sit) + tw * (hash(k * 2.3) - 0.5) * 0.9;
+  u.head.rotation.x = -0.06 - 0.12 * sit + Math.sin(t * 0.5 + u.phase) * 0.03;
+  u.hair.rotation.z = Math.sin(t * 0.8 + u.phase) * 0.03 + (moving ? Math.sin(ph) * 0.05 : 0);
+  u.hair.rotation.x = Math.sin(t * 0.6 + u.phase) * 0.02;
   u.tail.rotation.x = Math.sin(t * (moving ? 5 : 1.3) + u.phase) * 0.12;
   // rare slow blink + glowing pupils that flicker
   const blink = ((t + u.phase) % 6.5) < 0.18 ? 0.05 : 1;
@@ -1133,7 +1190,7 @@ const hueOf = (id) => Array.from(String(id)).reduce((a, c) => a + c.charCodeAt(0
 function getRemote(id) {
   if (!remotes[id]) {
     const hue = hueOf(id);
-    remotes[id] = { mesh: makePlayer(new THREE.Color('hsl(' + hue + ', 75%, 58%)'), hue % 3), x: 0, z: 3, ry: 0 };
+    remotes[id] = { mesh: makePlayer(new THREE.Color('hsl(' + hue + ', 75%, 58%)'), hue % 4), x: 0, z: 3, ry: 0 };
   }
   return remotes[id];
 }
@@ -1156,17 +1213,17 @@ function toggleCamera() {
   updateCamLabel();
 }
 
-let lastH = [NaN, 0, 0, 0, 0], camWantC = 0, camCollC = false; // the wall-collision ray is only re-cast when the view actually changed
+let lastH = [NaN, 0, 0, 0, 0, 0], camWantC = 0, camCollC = false; // the wall-collision ray is only re-cast when the view actually changed
 function updateCamera(dt) {
-  head.set(me.position.x, me.position.y + HEAD_Y, me.position.z);
+  head.set(me.position.x, me.position.y + HEAD_Y - 0.2 * me.userData.sit, me.position.z);
   const cp = Math.cos(pitch);
   dir.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp); // look direction
 
   const modeDist = mode === 'third' ? TP_DIST : 0;
   let want = modeDist, collided = false;
   if (modeDist > 0) { // keep the camera inside the room
-    if (head.x !== lastH[0] || head.z !== lastH[1] || yaw !== lastH[2] || pitch !== lastH[3] || modeDist !== lastH[4]) {
-      lastH = [head.x, head.z, yaw, pitch, modeDist];
+    if (head.x !== lastH[0] || head.z !== lastH[1] || yaw !== lastH[2] || pitch !== lastH[3] || modeDist !== lastH[4] || head.y !== lastH[5]) {
+      lastH = [head.x, head.z, yaw, pitch, modeDist, head.y];
       back.copy(dir).negate();
       camRay.set(head, back);
       camRay.far = modeDist + 0.3;
@@ -1232,6 +1289,7 @@ addEventListener('keydown', (e) => {
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (controlsOpen && deckKey(e, k)) return;
   if (k === 'v') toggleCamera();
+  else if (k === 'g') toggleSit();
   else if (k === 'f') toggleLight();
   else if (k === 'e') { if (controlsOpen) closeControls(); else if (pickTV()) openControls(); }
   else keys[k] = true;
@@ -1563,8 +1621,8 @@ $('joinBtn').onclick = () => {
   sendPos(true);
   try { chatBC = new BroadcastChannel('roommate-chat-' + code); chatBC.onmessage = (ev) => receiveChat(ev.data); } catch (e) { chatBC = null; }
   addChatLine('', 'You are not alone in here.', null, 'sys');
-  helpEl.textContent = IS_TOUCH ? 'Left stick: move   Drag: look   Tap the TV or the switch'
-                                : 'Click to look around   WASD move   V camera   E TV   F light   T chat';
+  helpEl.textContent = IS_TOUCH ? 'Left stick: move   Drag: look   Tap the TV or the switch   Sit button near the chairs'
+                                : 'Click to look around   WASD move   V camera   E TV   F light   G sit   T chat';
   helpEl.classList.add('show'); setTimeout(() => helpEl.classList.remove('show'), 9000);
 };
 
@@ -1602,6 +1660,33 @@ if (IS_TOUCH) {
   addEventListener('pointerup', endLook); addEventListener('pointercancel', endLook);
 }
 
+// ---------- sitting (other players see it automatically: a player standing on a seat spot is drawn seated) ----------
+let seatIdx = -1;
+const sitBtn = $('sitBtn'), prompt3El = $('prompt3');
+const seatOcc = (i) => { const c = CHAIRS[i]; for (const id in remotes) if (Math.hypot(remotes[id].mesh.position.x - c.x, remotes[id].mesh.position.z - (c.z + 0.03)) < 0.12) return true; return false; };
+function nearestFreeChair() {
+  let best = -1, bd = 1.9;
+  CHAIRS.forEach((c, i) => { const d = Math.hypot(me.position.x - c.x, me.position.z - c.z); if (d < bd && !seatOcc(i)) { bd = d; best = i; } });
+  return best;
+}
+function sitDown() {
+  const i = nearestFreeChair(); if (i < 0) return;
+  seatIdx = i; me.position.set(CHAIRS[i].x, 0, CHAIRS[i].z + 0.03); me.rotation.y = Math.PI;
+  yaw = 0; pitch = -0.12; sendPos(true);
+}
+function standUp() { const c = CHAIRS[seatIdx]; seatIdx = -1; me.position.set(c.x, 0, c.z - 0.75); sendPos(true); }
+function toggleSit() { if (seatIdx >= 0) standUp(); else sitDown(); if (sitBtn) sitBtn.blur(); }
+function pushOutOfChairs() {
+  for (const c of CHAIRS) {
+    const hx = 0.57, hz = 0.56, px = me.position.x - c.x, pz = me.position.z - c.z;
+    if (Math.abs(px) < hx && Math.abs(pz) < hz) {
+      const ox = hx - Math.abs(px), oz = hz - Math.abs(pz);
+      if (ox < oz) me.position.x += (px < 0 ? -1 : 1) * ox; else me.position.z += (pz < 0 ? -1 : 1) * oz;
+    }
+  }
+}
+sitBtn.onclick = toggleSit;
+
 // ---------- main loop ----------
 function angDiff(a, b) {
   let d = (b - a) % (2 * Math.PI);
@@ -1633,6 +1718,7 @@ function loop(now) {
   fw = Math.max(-1, Math.min(1, fw)); st = Math.max(-1, Math.min(1, st));
   let dx = 0, dz = 0;
   const moving = Math.abs(fw) > 0.01 || Math.abs(st) > 0.01;
+  if (moving && seatIdx >= 0) standUp(); // any movement key gets you out of the chair
   if (moving) {
     dx = -Math.sin(yaw) * fw + Math.cos(yaw) * st;
     dz = -Math.cos(yaw) * fw - Math.sin(yaw) * st;
@@ -1640,9 +1726,10 @@ function loop(now) {
     dx /= len; dz /= len;
     me.position.x = Math.max(-5.3, Math.min(5.3, me.position.x + dx * 4 * dt));
     me.position.z = Math.max(-4.4, Math.min(5.3, me.position.z + dz * 4 * dt));
-    pushOutOfBed();
+    pushOutOfBed(); pushOutOfChairs();
   }
-  if (mode === 'first') me.rotation.y = yaw + Math.PI;                       // body follows where you look
+  if (seatIdx >= 0) me.rotation.y = Math.PI;
+  else if (mode === 'first') me.rotation.y = yaw + Math.PI;                       // body follows where you look
   else if (moving) me.rotation.y += angDiff(me.rotation.y, Math.atan2(dx, dz)) * (1 - Math.exp(-dt * 14));
   if (now - lastSent > 50) { lastSent = now; sendPos(false); }
 
@@ -1653,9 +1740,10 @@ function loop(now) {
     r.mesh.position.x += (r.x - r.mesh.position.x) * ra;
     r.mesh.position.z += (r.z - r.mesh.position.z) * ra;
     r.mesh.rotation.y += angDiff(r.mesh.rotation.y, r.ry) * ra;
-    animateChar(r.mesh, rm, ts);
+    const sr = CHAIRS.some((c) => Math.hypot(r.mesh.position.x - c.x, r.mesh.position.z - (c.z + 0.03)) < 0.1);
+    animateChar(r.mesh, rm && !sr, ts, sr);
   }
-  animateChar(me, moving, ts);
+  animateChar(me, moving, ts, seatIdx >= 0);
 
   animateEnvironment(ts);
   updateCamera(dt);
@@ -1664,6 +1752,10 @@ function loop(now) {
   if (now - lastPromptT > 120) { // the "E: TV controls" hint needs a ray cast: 8x a second is plenty
     lastPromptT = now;
     setShown(promptEl, joined && !controlsOpen && !chatOpen && pickTV());
+    const nf = seatIdx >= 0 ? -2 : nearestFreeChair(), txt = seatIdx >= 0 ? 'Move to stand up   G: stand' : 'G: sit down';
+    if (prompt3El._t !== txt) { prompt3El._t = txt; prompt3El.textContent = txt; }
+    setShown(prompt3El, joined && !controlsOpen && !chatOpen && (seatIdx >= 0 || nf >= 0));
+    const sl = seatIdx >= 0 ? 'Stand (G)' : 'Sit (G)'; if (sitBtn._t !== sl) { sitBtn._t = sl; sitBtn.textContent = sl; }
   }
 }
 updateCamLabel();
