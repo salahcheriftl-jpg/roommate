@@ -4,15 +4,25 @@
 <meta charset="utf-8">
 <title>ROOMMATE (alpha)</title>
 <style>
-  body { margin: 0; overflow: hidden; font-family: sans-serif; background: #111; color: #eee; }
-  canvas { display: block; }
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: sans-serif; background: #1a1a24; color: #eee; }
+  /* the canvas is transparent and lets clicks pass through, so the YouTube player under it stays usable */
+  canvas { position: fixed; left: 0; top: 0; z-index: 2; pointer-events: none; }
   #join { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
           justify-content: center; gap: 10px; background: #111; z-index: 10; }
-  #bar { position: fixed; top: 0; left: 0; right: 0; display: none; gap: 8px; align-items: center;
-         padding: 8px; background: rgba(0,0,0,.65); z-index: 5; }
-  #bar input { flex: 1; padding: 4px; }
-  #tv { position: fixed; display: none; z-index: 2; background: #000; }
-  #tv iframe { width: 100%; height: 100%; }
+  .bar { position: fixed; left: 0; right: 0; display: none; gap: 8px; align-items: center;
+         padding: 6px 8px; background: rgba(0,0,0,.65); z-index: 5; font-size: 14px; }
+  #bar { top: 0; }
+  #player { top: 38px; }
+  #seek { flex: 1; min-width: 100px; }
+  #url { width: 220px; padding: 4px; }
+  .chip { padding: 2px 8px; border-radius: 10px; background: rgba(255,255,255,.15); }
+  #cross { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%;
+           background: rgba(255,255,255,.8); z-index: 4; display: none; pointer-events: none; }
+  #prompt { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); padding: 4px 10px;
+            background: rgba(0,0,0,.6); border-radius: 4px; display: none; z-index: 4; pointer-events: none; }
+  #tv { position: fixed; left: 0; top: 0; width: 812px; height: 452px; transform-origin: 0 0;
+        z-index: 1; background: #000; display: none; }
+  #tv iframe { width: 100%; height: 100%; border: 0; }
 </style>
 </head>
 <body>
@@ -25,20 +35,34 @@
   <p id="status" style="opacity:.9">Connecting to server...</p>
 </div>
 
-<div id="bar">
+<div id="bar" class="bar">
   <b>Room: <span id="roomLabel"></span></b>
-  <input id="url" placeholder="Paste a YouTube link">
-  <button id="loadBtn">Play on TV</button>
-  <span style="opacity:.6">WASD to move</span>
+  <span id="camMode" class="chip"></span>
+  <span style="opacity:.6">Click room to look - WASD move - V camera - E TV</span>
+  <button id="tvBtn" style="margin-left:auto">TV controls (E)</button>
 </div>
 
+<div id="player" class="bar">
+  <button id="playBtn">&#9654;</button>
+  <button id="backBtn">-10s</button>
+  <button id="fwdBtn">+10s</button>
+  <input type="range" id="seek" min="0" max="1" step="0.1" value="0">
+  <span id="timeLbl">0:00 / 0:00</span>
+  <input type="text" id="url" placeholder="Paste a YouTube link">
+  <button id="loadBtn">Load</button>
+  <button id="closeBtn">&#10005;</button>
+</div>
+
+<div id="cross"></div>
+<div id="prompt">E: TV controls</div>
 <div id="tv"><div id="yt"></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
-const statusEl = document.getElementById('status');
+const $ = (id) => document.getElementById(id);
+const statusEl = $('status');
 if (typeof THREE === 'undefined') {
   statusEl.textContent = 'Three.js failed to load (blocked or offline?)';
   throw new Error('THREE missing');
@@ -52,13 +76,19 @@ socket.on('connect', () => (statusEl.textContent = 'Connected to server'));
 socket.on('connect_error', () => (statusEl.textContent = 'Cannot reach server...'));
 socket.on('disconnect', () => (statusEl.textContent = 'Disconnected from server'));
 
+// ---------- state ----------
+let joined = false, controlsOpen = false, locked = false;
+let mode = 'third';              // 'third' | 'first'
+let yaw = 0, pitch = -0.25;      // look angles (yaw 0 = facing the TV wall)
+let camDist = 4.5;               // current camera distance behind the head (0 = first person)
+const TP_DIST = 4.5, HEAD_Y = 1.55, SENS = 0.0022;
+
 // ---------- 3D scene ----------
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a24);
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
-camera.position.set(0, 7, 11);
-camera.lookAt(0, 2, 0);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const scene = new THREE.Scene(); // no background: the canvas is transparent (page colour shows through)
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.05, 100);
+camera.rotation.order = 'YXZ';
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setClearColor(0x000000, 0);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
@@ -67,27 +97,36 @@ const sun = new THREE.DirectionalLight(0xffffff, 0.6);
 sun.position.set(5, 10, 5);
 scene.add(sun);
 
+const colliders = []; // things the third-person camera must not pass through
 function box(w, h, d, color, x, y, z) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
   m.position.set(x, y, z);
   scene.add(m);
+  colliders.push(m);
   return m;
 }
 
-// floor + 3 walls (front is open so the camera can see in)
+// floor + 3 walls (front is open so you can see in)
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshLambertMaterial({ color: 0x8b6b4a }));
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
+colliders.push(floor);
 box(12, 5, 0.3, 0xb8c4d6, 0, 2.5, -6);   // back
 box(0.3, 5, 12, 0x9fb0c8, -6, 2.5, 0);   // left
 box(0.3, 5, 12, 0x9fb0c8, 6, 2.5, 0);    // right
 
 // TV on a table against the back wall
-box(5, 1, 1, 0x5a3e2b, 0, 0.5, -5.3);          // table
-box(4.4, 2.6, 0.3, 0x111111, 0, 2.4, -5.7);    // TV body
-const screen = new THREE.Mesh(new THREE.PlaneGeometry(4, 2.2), new THREE.MeshBasicMaterial({ color: 0x222233 }));
+box(5, 1, 1, 0x5a3e2b, 0, 0.5, -5.3);                 // table
+const tvBody = box(4.4, 2.6, 0.3, 0x111111, 0, 2.4, -5.7);
+// When a video is on, the screen becomes a "hole" in the transparent canvas, so the real
+// YouTube player (underneath) shows through and anything in front of the TV still hides it.
+const offMat = new THREE.MeshBasicMaterial({ color: 0x222233 });
+const holeMat = new THREE.MeshBasicMaterial({ colorWrite: false });
+const screen = new THREE.Mesh(new THREE.PlaneGeometry(4, 2.2), offMat);
 screen.position.set(0, 2.4, -5.54);
+screen.renderOrder = -1;
 scene.add(screen);
+const tvPick = [tvBody, screen];
 
 // ---------- players ----------
 function makePlayer(color) {
@@ -106,6 +145,7 @@ function makePlayer(color) {
 
 const me = makePlayer(0x3aa0ff);
 me.position.set(0, 0, 3);
+me.rotation.y = Math.PI; // face the TV
 
 const remotes = {}; // id -> { mesh, x, z, ry }
 function getRemote(id) {
@@ -117,12 +157,103 @@ function getRemote(id) {
   return remotes[id];
 }
 
-// ---------- movement ----------
-const keys = {};
-addEventListener('keydown', (e) => { if (e.target.tagName !== 'INPUT') keys[e.key.toLowerCase()] = true; });
-addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+// ---------- camera ----------
+const camRay = new THREE.Raycaster();
+const pickRay = new THREE.Raycaster();
+pickRay.far = 20;
+const head = new THREE.Vector3(), dir = new THREE.Vector3(), back = new THREE.Vector3();
 
-let joined = false, lastSent = 0, lastSentPos = '';
+function clampPitch() {
+  pitch = mode === 'third' ? Math.max(-1.0, Math.min(0.45, pitch)) : Math.max(-1.5, Math.min(1.5, pitch));
+}
+function updateCamLabel() {
+  $('camMode').textContent = 'Camera: ' + (mode === 'third' ? 'Third person' : 'First person') + ' (V)';
+}
+function toggleCamera() {
+  mode = mode === 'third' ? 'first' : 'third';
+  clampPitch();
+  updateCamLabel();
+}
+
+function updateCamera(dt) {
+  head.set(me.position.x, me.position.y + HEAD_Y, me.position.z);
+  const cp = Math.cos(pitch);
+  dir.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp); // look direction
+
+  const modeDist = mode === 'third' ? TP_DIST : 0;
+  let want = modeDist, collided = false;
+  if (modeDist > 0) { // keep the camera inside the room
+    back.copy(dir).negate();
+    camRay.set(head, back);
+    camRay.far = modeDist + 0.3;
+    const hit = camRay.intersectObjects(colliders, false)[0];
+    if (hit && hit.distance - 0.25 < modeDist) { want = Math.max(0, hit.distance - 0.25); collided = true; }
+  }
+  if (collided && want < camDist) camDist = want;                     // snap in when a wall is behind
+  else camDist += (want - camDist) * (1 - Math.exp(-dt * 10));        // otherwise glide
+
+  camera.position.copy(head).addScaledVector(dir, -camDist);
+  camera.rotation.set(pitch, yaw, 0);
+  camera.updateMatrixWorld();
+  me.visible = camDist > 0.9; // first person (or camera jammed against a wall): hide own body locally
+}
+
+// ---------- TV picking + controls ----------
+const ndc = new THREE.Vector2();
+function pickTV(ev) {
+  if (ev && !locked) ndc.set(ev.clientX / innerWidth * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1);
+  else ndc.set(0, 0); // looking straight ahead
+  pickRay.setFromCamera(ndc, camera);
+  return pickRay.intersectObjects(tvPick, false).length > 0;
+}
+function openControls() {
+  controlsOpen = true;
+  $('player').style.display = 'flex';
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function closeControls() {
+  controlsOpen = false;
+  $('player').style.display = 'none';
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+function lockMouse() {
+  const p = document.body.requestPointerLock();
+  if (p && p.catch) p.catch(() => {});
+}
+
+// ---------- input ----------
+const keys = {};
+const typing = (e) => e.target && e.target.tagName === 'INPUT' && e.target.type === 'text';
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { if (controlsOpen) closeControls(); return; }
+  if (!joined || typing(e)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'v') toggleCamera();
+  else if (k === 'e') { if (controlsOpen) closeControls(); else if (pickTV()) openControls(); }
+  else keys[k] = true;
+});
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === document.body;
+  $('cross').style.display = locked ? 'block' : 'none';
+});
+addEventListener('mousemove', (e) => {
+  if (!locked) return;
+  yaw -= e.movementX * SENS;
+  pitch -= e.movementY * SENS;
+  clampPitch();
+});
+addEventListener('mousedown', (e) => {
+  if (!joined || e.button !== 0 || e.target.closest('.bar, #join, #tv')) return;
+  if (locked) { if (pickTV()) openControls(); }          // click on the TV while looking around
+  else if (pickTV(e)) openControls();                    // click on the TV with the cursor
+  else { if (controlsOpen) closeControls(); lockMouse(); } // click anywhere else: mouse look
+});
+
+// ---------- networking: players ----------
+let lastSent = 0, lastSentPos = '';
 function sendPos(force) {
   if (!joined) return;
   const s = `${me.position.x.toFixed(2)},${me.position.z.toFixed(2)},${me.rotation.y.toFixed(2)}`;
@@ -130,8 +261,6 @@ function sendPos(force) {
   lastSentPos = s;
   socket.emit('move', { x: me.position.x, z: me.position.z, ry: me.rotation.y });
 }
-
-// ---------- networking: players ----------
 socket.on('player-joined', () => sendPos(true)); // tell the newcomer where I am
 socket.on('move', (p) => { const r = getRemote(p.id); r.x = p.x; r.z = p.z; r.ry = p.ry; });
 socket.on('player-left', (id) => {
@@ -139,17 +268,20 @@ socket.on('player-left', (id) => {
 });
 
 // ---------- YouTube on the TV ----------
-const tv = document.getElementById('tv');
-let ytReady = false, player = null, playerReady = false, pending = null, suppress = false, currentVid = null;
+const tv = $('tv');
+let ytReady = false, player = null, playerReady = false, pending = null;
+let suppressUntil = 0, currentVid = null, tvOn = false, dragging = false;
 
 function onYouTubeIframeAPIReady() { ytReady = true; if (pending) applyVideo(pending); }
 
-function quiet() { suppress = true; setTimeout(() => (suppress = false), 800); }
+function quiet() { suppressUntil = Date.now() + 800; } // ignore player events we caused ourselves
 
 function applyVideo(v) {
   if (!ytReady || (player && !playerReady)) { pending = v; return; }
   pending = null;
+  tvOn = true;
   tv.style.display = 'block';
+  screen.material = holeMat;
   quiet();
 
   if (!player) {
@@ -167,18 +299,18 @@ function applyVideo(v) {
   }
   if (currentVid !== v.id) {
     currentVid = v.id;
-    player.loadVideoById(v.id, v.time || 0);
+    v.playing ? player.loadVideoById(v.id, v.time || 0) : player.cueVideoById(v.id, v.time || 0);
     return;
   }
-  if (Math.abs(player.getCurrentTime() - v.time) > 1.5) player.seekTo(v.time, true);
+  if (Math.abs(player.getCurrentTime() - v.time) > (v.playing ? 1.5 : 0.3)) player.seekTo(v.time, true);
   v.playing ? player.playVideo() : player.pauseVideo();
 }
 
-// the player's own controls (click play/pause on the TV) are what get synced
+// YouTube's own controls on the TV still sync too
 function onPlayerState(e) {
-  if (suppress) return;
-  if (e.data === 1) socket.emit('video-state', { playing: true, time: player.getCurrentTime() });
-  else if (e.data === 2) socket.emit('video-state', { playing: false, time: player.getCurrentTime() });
+  if (Date.now() < suppressUntil) return;
+  if (e.data === 1) sendState(true, player.getCurrentTime());
+  else if (e.data === 2) sendState(false, player.getCurrentTime());
 }
 
 socket.on('video', applyVideo);
@@ -187,56 +319,147 @@ function youtubeId(url) {
   const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/);
   return m ? m[1] : null;
 }
-document.getElementById('loadBtn').onclick = () => {
-  const id = youtubeId(document.getElementById('url').value.trim());
+
+// ---------- playback bar (all actions go through Socket.IO) ----------
+const isPlaying = () => playerReady && (player.getPlayerState() === 1 || player.getPlayerState() === 3);
+function sendState(playing, time) { socket.emit('video-state', { playing, time }); }
+
+function togglePlay() {
+  if (!playerReady) return;
+  const t = player.getCurrentTime(), play = !isPlaying();
+  quiet();
+  play ? player.playVideo() : player.pauseVideo();
+  sendState(play, t);
+}
+function seekTo(t) {
+  if (!playerReady) return;
+  const dur = player.getDuration() || 0;
+  t = Math.max(0, dur ? Math.min(t, dur) : t);
+  quiet();
+  player.seekTo(t, true);
+  sendState(isPlaying(), t);
+}
+function fmt(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+}
+
+$('playBtn').onclick = () => { togglePlay(); $('playBtn').blur(); };
+$('backBtn').onclick = () => { if (playerReady) seekTo(player.getCurrentTime() - 10); $('backBtn').blur(); };
+$('fwdBtn').onclick = () => { if (playerReady) seekTo(player.getCurrentTime() + 10); $('fwdBtn').blur(); };
+$('seek').oninput = () => { dragging = true; $('timeLbl').textContent = fmt($('seek').value) + ' / ' + fmt($('seek').max); };
+$('seek').onchange = () => { dragging = false; seekTo(parseFloat($('seek').value)); $('seek').blur(); };
+$('loadBtn').onclick = () => {
+  const id = youtubeId($('url').value.trim());
   if (!id) return alert('Could not read that YouTube link');
   socket.emit('video-load', id);
 };
+$('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadBtn').click(); });
+$('closeBtn').onclick = closeControls;
+$('tvBtn').onclick = () => (controlsOpen ? closeControls() : openControls());
 
-// keep the video box exactly over the 3D TV screen
+setInterval(() => {
+  if (!controlsOpen || !playerReady) return;
+  const cur = player.getCurrentTime() || 0, dur = player.getDuration() || 0;
+  if (!dragging) {
+    $('seek').max = dur || 1;
+    $('seek').value = cur;
+    $('timeLbl').textContent = fmt(cur) + ' / ' + fmt(dur);
+  }
+  $('playBtn').textContent = isPlaying() ? '\u23F8' : '\u25B6';
+}, 250);
+
+// ---------- pin the YouTube player onto the 3D TV screen ----------
+// Solves the perspective transform that maps the player rectangle onto the TV screen's
+// four projected corners and applies it as a CSS matrix3d (the player stays fully clickable).
+const TV_W = 812, TV_H = 452;
+const tvSrc = [[0, 0], [TV_W, 0], [TV_W, TV_H], [0, TV_H]];
+// slightly larger than the glass; the extra edge hides under the opaque TV frame
+const tvCorners = [[-2.03, 3.53], [2.03, 3.53], [2.03, 1.27], [-2.03, 1.27]].map(([x, y]) => new THREE.Vector3(x, y, -5.54));
+const tmpV = new THREE.Vector3();
+
+function homography(src, dst) {
+  const A = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y, u]);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y, v]);
+  }
+  for (let c = 0; c < 8; c++) {
+    let p = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]];
+    const d = A[c][c];
+    if (Math.abs(d) < 1e-12) return null;
+    for (let k = c; k < 9; k++) A[c][k] /= d;
+    for (let r = 0; r < 8; r++) {
+      if (r === c) continue;
+      const f = A[r][c];
+      for (let k = c; k < 9; k++) A[r][k] -= f * A[c][k];
+    }
+  }
+  return A.map((row) => row[8]);
+}
+
 function placeTV() {
-  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-  [[-2, 3.5], [2, 3.5], [-2, 1.3], [2, 1.3]].forEach(([x, y]) => {
-    const v = new THREE.Vector3(x, y, -5.54).project(camera);
-    const px = (v.x + 1) / 2 * innerWidth, py = (1 - v.y) / 2 * innerHeight;
-    x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
-  });
-  tv.style.left = x0 + 'px'; tv.style.top = y0 + 'px';
-  tv.style.width = (x1 - x0) + 'px'; tv.style.height = (y1 - y0) + 'px';
+  if (!tvOn) return;
+  const dst = [];
+  for (const c of tvCorners) {
+    tmpV.copy(c).applyMatrix4(camera.matrixWorldInverse);
+    if (tmpV.z > -0.2) { tv.style.visibility = 'hidden'; return; } // TV is behind the camera
+    tmpV.copy(c).project(camera);
+    dst.push([(tmpV.x + 1) / 2 * innerWidth, (1 - tmpV.y) / 2 * innerHeight]);
+  }
+  const h = homography(tvSrc, dst);
+  if (!h) { tv.style.visibility = 'hidden'; return; }
+  tv.style.visibility = 'visible';
+  tv.style.transform = 'matrix3d(' + [h[0], h[3], 0, h[6], h[1], h[4], 0, h[7], 0, 0, 1, 0, h[2], h[5], 0, 1].join(',') + ')';
 }
 
 // ---------- join UI ----------
-const codeInput = document.getElementById('code');
+const codeInput = $('code');
 codeInput.value = Math.random().toString(36).slice(2, 6).toUpperCase();
-document.getElementById('joinBtn').onclick = () => {
+$('joinBtn').onclick = () => {
   const code = codeInput.value.trim().toUpperCase();
   if (!code) return;
   socket.emit('join', code);
   joined = true;
-  document.getElementById('roomLabel').textContent = code;
-  document.getElementById('join').style.display = 'none';
-  document.getElementById('bar').style.display = 'flex';
+  $('roomLabel').textContent = code;
+  $('join').style.display = 'none';
+  $('bar').style.display = 'flex';
+  updateCamLabel();
   sendPos(true);
 };
 
 // ---------- main loop ----------
+function angDiff(a, b) {
+  let d = (b - a) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
 let prev = performance.now();
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min((now - prev) / 1000, 0.1);
   prev = now;
 
+  // WASD is relative to where the camera looks
+  const fw = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
+  const st = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
   let dx = 0, dz = 0;
-  if (keys['w']) dz -= 1;
-  if (keys['s']) dz += 1;
-  if (keys['a']) dx -= 1;
-  if (keys['d']) dx += 1;
-  if (dx || dz) {
+  if (fw || st) {
+    dx = -Math.sin(yaw) * fw + Math.cos(yaw) * st;
+    dz = -Math.cos(yaw) * fw - Math.sin(yaw) * st;
     const len = Math.hypot(dx, dz);
-    me.position.x = Math.max(-5.3, Math.min(5.3, me.position.x + (dx / len) * 4 * dt));
-    me.position.z = Math.max(-4.4, Math.min(5.3, me.position.z + (dz / len) * 4 * dt));
-    me.rotation.y = Math.atan2(dx, dz);
+    dx /= len; dz /= len;
+    me.position.x = Math.max(-5.3, Math.min(5.3, me.position.x + dx * 4 * dt));
+    me.position.z = Math.max(-4.4, Math.min(5.3, me.position.z + dz * 4 * dt));
   }
+  if (mode === 'first') me.rotation.y = yaw + Math.PI;                       // body follows where you look
+  else if (fw || st) me.rotation.y += angDiff(me.rotation.y, Math.atan2(dx, dz)) * (1 - Math.exp(-dt * 14));
   if (now - lastSent > 50) { lastSent = now; sendPos(false); }
 
   for (const id in remotes) {
@@ -246,9 +469,12 @@ function loop(now) {
     r.mesh.rotation.y = r.ry;
   }
 
+  updateCamera(dt);
   renderer.render(scene, camera);
   placeTV();
+  $('prompt').style.display = (joined && !controlsOpen && pickTV()) ? 'block' : 'none';
 }
+updateCamLabel();
 requestAnimationFrame(loop);
 
 addEventListener('resize', () => {
