@@ -25,6 +25,8 @@
            background: rgba(255,255,255,.8); z-index: 4; display: none; pointer-events: none; }
   #prompt { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); padding: 4px 10px;
             background: rgba(0,0,0,.6); border-radius: 4px; display: none; z-index: 4; pointer-events: none; }
+  #prompt2 { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); padding: 4px 10px;
+             background: rgba(0,0,0,.6); border-radius: 4px; display: none; z-index: 4; pointer-events: none; }
   #tv { position: fixed; left: 0; top: 0; width: 812px; height: 452px; transform-origin: 0 0;
         z-index: 1; background: #000; display: none; }
   #tv iframe { width: 100%; height: 100%; border: 0; }
@@ -43,8 +45,9 @@
 <div id="bar" class="bar">
   <b>Room: <span id="roomLabel"></span></b>
   <span id="camMode" class="chip"></span>
-  <span style="opacity:.6">Click room to look - WASD move - V camera - E TV</span>
-  <button id="tvBtn" style="margin-left:auto">TV controls (E)</button>
+  <span style="opacity:.6">Click room to look - WASD move - V camera - E TV - F light</span>
+  <button id="lightBtn" style="margin-left:auto">Light: ON (F)</button>
+  <button id="tvBtn">TV controls (E)</button>
 </div>
 
 <div id="player" class="bar">
@@ -61,6 +64,7 @@
 <div id="vig"></div>
 <div id="cross"></div>
 <div id="prompt">E: TV controls</div>
+<div id="prompt2">F: light switch (or click it)</div>
 <div id="tv"><div id="yt"></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -272,10 +276,14 @@ function box(w, h, d, color, x, y, z) {
 // ---------- room shell (same 12 x 12 x 5 footprint, front still open) ----------
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.48, metalness: 0.1 }));
 floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
 scene.add(floor);
 colliders.push(floor);
 box(12, 5, 0.3, 0x2c3238, 0, 2.5, -6);   // back  (dark core shows through the pad seams)
-box(0.3, 5, 12, 0x2c3238, -6, 2.5, 0);   // left
+box(0.3, 3, 12, 0x2c3238, -6, 1.5, 0).castShadow = true;           // left wall, below the window
+box(0.3, 1, 12, 0x2c3238, -6, 4.5, 0).castShadow = true;           // above
+box(0.3, 1, 3.075, 0x2c3238, -6, 3.5, -4.4625).castShadow = true;  // beside the window (back)
+box(0.3, 1, 7.95, 0x2c3238, -6, 3.5, 2.025).castShadow = true;     // beside the window (front)
 box(0.3, 5, 12, 0x2c3238, 6, 2.5, 0);    // right
 
 const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshStandardMaterial({ map: ceilingTexture(), roughness: 0.95 }));
@@ -327,7 +335,7 @@ colliders.push(ceiling);
       // back wall (the bare plate behind the TV replaces the pads there)
       if (!(Math.abs(s) <= 2.6 && r < 4)) addTile(s, y, -F + OFF, 0, F - Math.abs(s));
       // side walls (the front corner is open, so only the back corner is dark)
-      addTile(-F + OFF, y, s, Math.PI / 2, s + F);
+      if (!(r === 3 && i === 4)) addTile(-F + OFF, y, s, Math.PI / 2, s + F); // (skipped where the window is)
       addTile(F - OFF, y, s, -Math.PI / 2, s + F);
     }
   }
@@ -335,7 +343,7 @@ colliders.push(ceiling);
     const L = lists[v], im = new THREE.InstancedMesh(geo, mats[v], L.length);
     L.forEach((t, i) => { im.setMatrixAt(i, t.m); im.setColorAt(i, t.c); });
     im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true;
-    im.frustumCulled = false; // instanced meshes would otherwise be culled by the unit-square bounds
+    im.frustumCulled = false; im.receiveShadow = true; // instanced meshes would otherwise be culled by the unit-square bounds
     scene.add(im);
   }
 })();
@@ -434,6 +442,7 @@ bed.position.set(0, 0, BED_Z);
     bed.add(s, buckle);
   }
 })();
+bed.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
 scene.add(bed);
 
 // soft contact shadow under the bed (fake ambient occlusion)
@@ -464,33 +473,297 @@ const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xcfdce
 dust.frustumCulled = false;
 scene.add(dust);
 
-// ---------- per-frame: flicker, hum, dust, dead-TV static ----------
+// =====================================================================
+// DECOR + DYNAMIC LIGHTING (light switch, moonlight window, props)
+// =====================================================================
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+function decal(w, h, x, y, z, ry, draw) {
+  const c = mkCanvas(256, Math.round(256 * h / w)), g = c.getContext('2d');
+  draw(g, c.width, c.height);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({
+    map: canvasTex(c), transparent: true, roughness: 1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  m.position.set(x, y, z); m.rotation.y = ry; scene.add(m);
+  return m;
+}
+
+// ---------- barred moonlit window (left wall) ----------
+const WIN = { z0: -2.925, z1: -1.95 };
+const winZ = (WIN.z0 + WIN.z1) / 2, winW = WIN.z1 - WIN.z0;
+const moon = new THREE.SpotLight(0x86a6e0, 1.7, 24, 0.42, 0.25, 1);
+(function buildWindow() {
+  const c = mkCanvas(128, 128), g = c.getContext('2d'), R = rng(8);
+  const sg = g.createLinearGradient(0, 0, 0, 128); sg.addColorStop(0, '#08122a'); sg.addColorStop(1, '#2c4878');
+  g.fillStyle = sg; g.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(255,255,255,${0.2 + R() * 0.6})`; g.fillRect(R() * 128, R() * 90, 1, 1); }
+  blob(g, 88, 38, 30, 'rgba(190,210,255,0.5)', 'rgba(190,210,255,0)');
+  g.fillStyle = '#e4edff'; g.beginPath(); g.arc(88, 38, 11, 0, 7); g.fill();
+  const sky = new THREE.Mesh(new THREE.PlaneGeometry(winW, 1), new THREE.MeshBasicMaterial({ map: canvasTex(c), fog: false }));
+  sky.rotation.y = Math.PI / 2; sky.position.set(-6.12, 3.5, winZ);
+  scene.add(sky); colliders.push(sky);
+  const barM = new THREE.MeshStandardMaterial({ color: 0x20262b, roughness: 0.5, metalness: 0.6 });
+  for (let k = 1; k <= 6; k++) {
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1, 6), barM);
+    b.position.set(-5.95, 3.5, WIN.z0 + k * winW / 7); b.castShadow = true; scene.add(b);
+  }
+  for (const by of [3.33, 3.67]) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, winW), barM);
+    b.position.set(-5.95, by, winZ); b.castShadow = true; scene.add(b);
+  }
+  // the moon: a spot outside the wall, shining in through the bars (they cast real shadows)
+  moon.position.set(-7.6, 3.55, winZ); moon.target.position.set(0.8, 0, winZ + 1.2);
+  moon.castShadow = true; moon.shadow.mapSize.set(2048, 2048);
+  moon.shadow.camera.near = 1; moon.shadow.camera.far = 24; moon.shadow.bias = -0.0004;
+  scene.add(moon, moon.target);
+})();
+
+// ---------- security camera that slowly watches whoever is in the room ----------
+const secCam = new THREE.Group(), ledMat = new THREE.MeshBasicMaterial({ color: 0xff2020 });
+(function () {
+  const dark = new THREE.MeshStandardMaterial({ color: 0x3c4348, roughness: 0.5, metalness: 0.4 });
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), dark); arm.position.set(5.2, 4.82, -5.2);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.36), dark); body.position.z = 0.05;
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.1, 12), new THREE.MeshStandardMaterial({ color: 0x07090c, roughness: 0.15, metalness: 0.8 }));
+  lens.rotation.x = Math.PI / 2; lens.position.z = 0.26;
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), ledMat); led.position.set(0.07, 0.07, 0.2);
+  secCam.add(body, lens, led); secCam.position.set(5.2, 4.6, -5.2);
+  scene.add(arm, secCam);
+})();
+const secTgt = new THREE.Vector3(0, 1, 3), secWant = new THREE.Vector3();
+
+// ---------- wall clock, stuck at 3:07, second hand twitching in place ----------
+const clockSec = new THREE.Group();
+(function () {
+  const c = mkCanvas(256, 256), g = c.getContext('2d');
+  g.fillStyle = '#d3cfc0'; g.beginPath(); g.arc(128, 128, 126, 0, 7); g.fill();
+  blob(g, 90, 170, 80, 'rgba(120,100,60,0.3)', 'rgba(120,100,60,0)');
+  g.fillStyle = '#22262a'; g.font = 'bold 30px serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (let i = 1; i <= 12; i++) g.fillText(String(i), 128 + Math.sin(i * Math.PI / 6) * 96, 128 - Math.cos(i * Math.PI / 6) * 96);
+  const grp = new THREE.Group();
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.05, 32), new THREE.MeshStandardMaterial({ color: 0x4a5157, roughness: 0.5, metalness: 0.5 }));
+  rim.rotation.x = Math.PI / 2;
+  const face = new THREE.Mesh(new THREE.CircleGeometry(0.28, 32), new THREE.MeshStandardMaterial({ map: canvasTex(c), roughness: 0.6 }));
+  face.position.z = 0.026;
+  const hand = (len, w, color, ang) => {
+    const p = new THREE.Group(), m = new THREE.Mesh(new THREE.BoxGeometry(w, len, 0.008), new THREE.MeshBasicMaterial({ color }));
+    m.position.y = len / 2 - 0.02; p.add(m); p.position.z = 0.034; p.rotation.z = ang; grp.add(p); return p;
+  };
+  hand(0.14, 0.02, 0x111111, -(93.5 * Math.PI / 180));
+  hand(0.2, 0.014, 0x111111, -(42 * Math.PI / 180));
+  const s = hand(0.24, 0.006, 0xaa1c1c, 0); clockSec.userData.hand = s; // (stays parented to the clock group so it's drawn)
+  grp.add(rim, face);
+  grp.position.set(5.62, 3.55, -2.6); grp.rotation.y = -Math.PI / 2;
+  scene.add(grp);
+})();
+
+// ---------- EXIT sign over the door (stays lit when the light is off) ----------
+const exitMat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
+(function () {
+  const c = mkCanvas(128, 48), g = c.getContext('2d');
+  g.fillStyle = '#0b3d1c'; g.fillRect(0, 0, 128, 48);
+  g.fillStyle = '#7dffa0'; g.font = 'bold 34px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('EXIT', 64, 26);
+  exitMat.map = canvasTex(c);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.2, 0.52), new THREE.MeshStandardMaterial({ color: 0x1d2327, roughness: 0.6 }));
+  back.position.set(5.63, 2.72, 2.0);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.18), exitMat);
+  face.rotation.y = -Math.PI / 2; face.position.set(5.603, 2.72, 2.0);
+  scene.add(back, face);
+})();
+
+// ---------- ceiling pipes ----------
+(function () {
+  const pm = new THREE.MeshStandardMaterial({ color: 0x4b535a, roughness: 0.6, metalness: 0.5 });
+  for (const [px, r] of [[5.35, 0.07], [5.12, 0.04]]) {
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 11.6, 10), pm); p.rotation.x = Math.PI / 2; p.position.set(px, 4.72, 0); scene.add(p);
+  }
+  for (let z = -4.4; z <= 4.5; z += 2.9) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 0.06), pm); b.position.set(5.24, 4.78, z); scene.add(b); }
+})();
+
+// ---------- wall scratches, a smiley, a child's drawing ----------
+decal(1.0, 1.0, -5.655, 1.45, 2.9, Math.PI / 2, (g, w, h) => {
+  const R = rng(4); g.strokeStyle = 'rgba(35,38,42,0.65)'; g.lineWidth = 3; g.lineCap = 'round';
+  for (let grp = 0; grp < 8; grp++) {
+    const x0 = 22 + (grp % 4) * 52, y0 = 28 + Math.floor(grp / 4) * 42;
+    for (let i = 0; i < 4; i++) { g.beginPath(); g.moveTo(x0 + i * 9 + R() * 2, y0 + R() * 3); g.lineTo(x0 + i * 9 + R() * 3, y0 + 30 + R() * 3); g.stroke(); }
+    g.beginPath(); g.moveTo(x0 - 4, y0 + 26); g.lineTo(x0 + 38, y0 + 4); g.stroke();
+  }
+  g.lineWidth = 5; g.strokeStyle = 'rgba(15,15,18,0.75)'; // crooked marker smiley
+  g.beginPath(); g.ellipse(128, 190, 44, 40, 0.1, 0, 7); g.stroke();
+  g.beginPath(); g.moveTo(112, 176); g.lineTo(112, 186); g.moveTo(146, 174); g.lineTo(146, 184); g.stroke();
+  g.beginPath(); g.moveTo(104, 200); g.quadraticCurveTo(130, 228, 156, 196); g.stroke();
+});
+(function () {
+  const d = decal(0.62, 0.46, -4.2, 1.9, -5.65, 0, (g, w, h) => {
+    g.fillStyle = '#e9e3cf'; g.fillRect(0, 0, w, h);
+    blob(g, w * 0.8, h * 0.9, 90, 'rgba(120,100,60,0.25)', 'rgba(120,100,60,0)');
+    g.lineWidth = 4; g.lineCap = 'round';
+    g.strokeStyle = '#f2b81c'; g.beginPath(); g.arc(210, 40, 20, 0, 7); g.stroke();
+    for (let a = 0; a < 8; a++) { g.beginPath(); g.moveTo(210 + Math.cos(a * 0.785) * 26, 40 + Math.sin(a * 0.785) * 26); g.lineTo(210 + Math.cos(a * 0.785) * 36, 40 + Math.sin(a * 0.785) * 36); g.stroke(); }
+    g.strokeStyle = '#b3523c'; g.beginPath(); g.moveTo(20, 150); g.lineTo(20, 100); g.lineTo(60, 70); g.lineTo(100, 100); g.lineTo(100, 150); g.closePath(); g.stroke();
+    const fig = (x, col) => { g.strokeStyle = col; g.beginPath(); g.arc(x, 112, 10, 0, 7); g.moveTo(x, 122); g.lineTo(x, 150); g.moveTo(x - 14, 132); g.lineTo(x + 14, 132); g.moveTo(x, 150); g.lineTo(x - 10, 168); g.moveTo(x, 150); g.lineTo(x + 10, 168); g.stroke(); };
+    fig(135, '#3e6fd1'); fig(170, '#d65f93'); fig(205, '#3f9b52');
+    g.strokeStyle = '#111'; g.lineWidth = 5; g.beginPath(); // the fourth figure, scribbled out
+    for (let i = 0; i < 14; i++) { g.moveTo(228 + (i % 2) * 20, 105 + i * 4.5); g.lineTo(240 - (i % 2) * 20, 108 + i * 4.5); } g.stroke();
+    g.fillStyle = 'rgba(230,230,210,0.6)'; g.fillRect(6, 4, 36, 14); g.fillRect(w - 42, 4, 36, 14); // tape
+  });
+  d.rotation.z = 0.05;
+})();
+
+// ---------- the light switch (right wall) + tiny status LED ----------
+const SW_Z = 3.3;
+const swLever = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.08, 0.026), new THREE.MeshStandardMaterial({ color: 0xcfd4d8, roughness: 0.4, metalness: 0.2 }));
+const swLedMat = new THREE.MeshBasicMaterial({ color: 0x300808, fog: false });
+const swHit = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.5, 0.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+(function () {
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.14), new THREE.MeshStandardMaterial({ color: 0x8e979c, roughness: 0.5, metalness: 0.3 }));
+  plate.position.set(5.62, 1.3, SW_Z);
+  swLever.position.set(5.585, 1.3, SW_Z);
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 8), swLedMat); led.position.set(5.592, 1.4, SW_Z);
+  swHit.position.set(5.55, 1.3, SW_Z);
+  scene.add(plate, swLever, led, swHit);
+})();
+
+// ---------- night-light that keeps glowing when the room goes dark ----------
+const nlMat = new THREE.MeshBasicMaterial({ color: 0xffb870, fog: false });
+const nightLight = new THREE.PointLight(0xffb36b, 0.2, 7, 1.4);
+(function () {
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.07), new THREE.MeshStandardMaterial({ color: 0xcdc7bb, roughness: 0.8 }));
+  base.position.set(-5.63, 0.5, 4.2);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 10), nlMat); bulb.position.set(-5.595, 0.5, 4.2);
+  nightLight.position.set(-5.35, 0.6, 4.2);
+  scene.add(base, bulb, nightLight);
+})();
+
+// ---------- glow of the TV when a video is playing ----------
+const tvLight = new THREE.PointLight(0x8fb0ff, 0, 12, 1.2);
+tvLight.position.set(0, 2.3, -4.3);
+scene.add(tvLight);
+
+// ---------- small props: worn teddy on the bed, paper cup + pills on the floor ----------
+(function () {
+  const brown = new THREE.MeshStandardMaterial({ color: 0x7d5f48, roughness: 1, emissive: 0x1a1008 });
+  const tan = new THREE.MeshStandardMaterial({ color: 0xb59a7e, roughness: 1, emissive: 0x1a1610 });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x0b0b0d });
+  const S = new THREE.SphereGeometry(1, 14, 10);
+  const bear = new THREE.Group();
+  const add = (mat, x, y, z, sx, sy, sz) => { const m = new THREE.Mesh(S, mat); m.position.set(x, y, z); m.scale.set(sx, sy || sx, sz || sx); bear.add(m); return m; };
+  add(brown, 0, 0.13, 0, 0.13, 0.14, 0.115); add(tan, 0, 0.12, 0.09, 0.08, 0.09, 0.04);   // body + belly (with a mended patch)
+  add(brown, 0, 0.31, 0.02, 0.105);                                                     // head
+  add(brown, -0.08, 0.39, 0, 0.04); add(brown, 0.08, 0.39, 0, 0.04);                    // ears
+  add(tan, 0, 0.285, 0.1, 0.05, 0.04, 0.035); add(dark, 0, 0.3, 0.13, 0.014);           // snout + nose
+  add(dark, 0.04, 0.33, 0.095, 0.017);                                                  // one button eye
+  for (const a of [0.8, -0.8]) { const x = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.005, 0.004), dark); x.position.set(-0.04, 0.33, 0.1); x.rotation.z = a; bear.add(x); } // stitched-X eye
+  add(brown, -0.15, 0.14, 0.02, 0.05, 0.08, 0.05); add(brown, 0.15, 0.1, 0.03, 0.05, 0.08, 0.05);
+  add(brown, -0.07, 0.03, 0.06, 0.06, 0.04, 0.08); add(brown, 0.07, 0.03, 0.06, 0.06, 0.04, 0.08);
+  bear.position.set(-0.1, 0.585, -0.22); bear.rotation.set(0, 0.6, 0.12);
+  bed.add(bear);
+  bear.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.03, 0.09, 10), new THREE.MeshStandardMaterial({ color: 0xe5e5e0, roughness: 0.9 }));
+  cup.position.set(1.9, 0.04, 2.4); cup.rotation.z = 1.45; cup.castShadow = true; scene.add(cup);
+  for (let i = 0; i < 5; i++) {
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), new THREE.MeshStandardMaterial({ color: i % 2 ? 0xf0f0f0 : 0xd8e4f4, roughness: 0.4 }));
+    p.scale.y = 0.6; p.position.set(2.05 + Math.random() * 0.3, 0.009, 2.3 + Math.random() * 0.25); scene.add(p);
+  }
+})();
+
+// ---------- light switch logic (F key, button, or click the switch) ----------
+let lightOn = true, lightSwitchT = -10, glow = 1, tubeGlow = 1, actx = null;
+function clunk(on) {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'square'; o.frequency.setValueAtTime(150, t0); o.frequency.exponentialRampToValueAtTime(55, t0 + 0.08);
+    g.gain.setValueAtTime(0.09, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.1);
+    o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0 + 0.12);
+    if (on) { // ballast buzz while the tubes catch
+      const b = actx.createOscillator(), bg = actx.createGain();
+      b.type = 'sawtooth'; b.frequency.value = 100; bg.gain.setValueAtTime(0.03, t0 + 0.05); bg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.9);
+      b.connect(bg); bg.connect(actx.destination); b.start(t0 + 0.05); b.stop(t0 + 0.95);
+    }
+  } catch (e) {}
+}
+function setLight(on, fromNet) {
+  if (on === lightOn) return;
+  lightOn = on; lightSwitchT = performance.now() / 1000;
+  clunk(on);
+  $('lightBtn').textContent = 'Light: ' + (on ? 'ON' : 'OFF') + ' (F)';
+  if (!fromNet) socket.emit('light', on); // other players follow (needs a one-line relay on the server)
+}
+function toggleLight() { setLight(!lightOn, false); }
+socket.on('light', (on) => setLight(!!on, true));
+socket.on('player-joined', () => { if (!lightOn) socket.emit('light', false); });
+$('lightBtn').onclick = () => { toggleLight(); $('lightBtn').blur(); };
+
+const swRay = new THREE.Raycaster(), swNdc = new THREE.Vector2();
+function pickSwitch(ev) {
+  if (Math.hypot(me.position.x - 5.6, me.position.z - SW_Z) > 3.6) return false;
+  if (ev && !locked) swNdc.set(ev.clientX / innerWidth * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1); else swNdc.set(0, 0);
+  swRay.setFromCamera(swNdc, camera); swRay.far = 25;
+  return swRay.intersectObject(swHit, false).length > 0;
+}
+
+// ---------- per-frame: lights, flicker, props, dust, dead-TV static ----------
 let nextFault = 6, faultEnd = 0, lastEnvT = 0;
+const FOG_ON = new THREE.Color(0x1a222a), FOG_OFF = new THREE.Color(0x03060a);
 function animateEnvironment(t) {
   const dt = Math.min(0.1, t - lastEnvT); lastEnvT = t;
-  // constant faint hum/instability
-  let k = 1 + 0.025 * Math.sin(t * 2.1) + 0.012 * Math.sin(t * 13.7 + 1.3) + 0.01 * Math.sin(t * 50);
-  const sag = Math.max(0, Math.sin(t * 0.31) * Math.sin(t * 0.17 + 1)); // slow brown-out
-  k *= 1 - 0.08 * sag;
-  // occasional short fault: a burst of stuttering before it steadies
-  if (t > nextFault && t > faultEnd) { faultEnd = t + 0.2 + Math.random() * 0.6; nextFault = faultEnd + 5 + Math.random() * 12; }
-  const faulting = t < faultEnd;
-  if (faulting) {
-    const s = Math.floor(t * 26), h = hash(s);
-    k *= h < 0.5 ? 0.05 + 0.25 * hash(s + 9) : 0.8 + 0.2 * hash(s + 3);
-  }
-  lamp.intensity = 1.5 * k;
-  amb.intensity = 0.32 * (0.88 + 0.12 * Math.min(k, 1));
-  const lv = Math.max(0, Math.min(1.05, k));
-  lightMat.color.setRGB(0.08 + 0.84 * lv, 0.1 + 0.86 * lv, 0.12 + 0.88 * lv);
+  const since = t - lightSwitchT;
 
-  const a = dustGeo.attributes.position.array; // slow drifting motes
+  // what the switch asks for, with fluorescent behaviour: stutters on, flickers out
+  let level = lightOn ? 1 : 0;
+  if (lightOn && since < 0.9) level = hash(Math.floor(since * 22) * 3.7 + 1) < since / 0.9 ? 1 : 0.06;
+  else if (!lightOn && since < 0.18) level = hash(Math.floor(since * 40) + 5) < 0.5 ? 0.5 : 0;
+  glow += (level - glow) * (1 - Math.exp(-dt * (level > glow ? 40 : 9)));
+  tubeGlow += (level - tubeGlow) * (1 - Math.exp(-dt * (level > tubeGlow ? 40 : 3))); // tubes fade slower than the light they give
+
+  // steady hum + slow brown-outs + occasional random fault (only while it's on)
+  let k = 1;
+  if (lightOn && since >= 0.9) {
+    k += 0.025 * Math.sin(t * 2.1) + 0.012 * Math.sin(t * 13.7 + 1.3) + 0.01 * Math.sin(t * 50);
+    const sag = Math.max(0, Math.sin(t * 0.31) * Math.sin(t * 0.17 + 1)); k *= 1 - 0.08 * sag;
+    if (t > nextFault && t > faultEnd) { faultEnd = t + 0.2 + Math.random() * 0.6; nextFault = faultEnd + 5 + Math.random() * 12; }
+    if (t < faultEnd) { const s = Math.floor(t * 26), h = hash(s); k *= h < 0.5 ? 0.05 + 0.25 * hash(s + 9) : 0.8 + 0.2 * hash(s + 3); }
+  }
+  const faulting = lightOn && t < faultEnd;
+  const L = glow * k, Lc = Math.max(0, Math.min(1, L));
+  lamp.intensity = 1.5 * Math.max(0, L);
+  amb.intensity = 0.05 + 0.27 * Lc;
+  hemi.intensity = 0.04 + 0.24 * Lc;
+  const lv = Math.max(0, Math.min(1.05, tubeGlow * k));
+  lightMat.color.setRGB(0.03 + 0.89 * lv, 0.035 + 0.925 * lv, 0.04 + 0.96 * lv);
+  scene.fog.color.copy(FOG_OFF).lerp(FOG_ON, Math.min(1, glow));
+
+  // moonlight drifting behind clouds
+  moon.intensity = 1.7 * (0.82 + 0.18 * Math.sin(t * 0.13) * Math.sin(t * 0.07 + 2));
+  // TV light + night-light get stronger when the room is dark
+  tvLight.intensity = tvOn ? (0.4 + 1.0 * (1 - Math.min(1, glow))) * (0.92 + 0.08 * Math.random()) : 0;
+  nightLight.intensity = 0.12 + 0.6 * (1 - Math.min(1, glow));
+  // switch visuals
+  swLever.rotation.z = lightOn ? 0.5 : -0.5;
+  swLedMat.color.setHex(lightOn ? 0x300808 : 0xff3030);
+  // exit sign hums
+  const ex = 0.82 + 0.12 * Math.sin(t * 3) + (hash(Math.floor(t * 9)) < 0.03 ? -0.5 : 0);
+  exitMat.color.setRGB(ex, ex, ex);
+  // security camera follows you
+  secWant.set(me.position.x, 1.1, me.position.z); secTgt.lerp(secWant, 0.03); secCam.lookAt(secTgt);
+  ledMat.color.setHex((t % 2) < 0.15 ? 0xff2a2a : 0x4a0a0a);
+  // the clock never moves forward; the second hand just twitches
+  clockSec.userData.hand.rotation.z = -((30 + (Math.floor(t * 2) % 2) * 6) * Math.PI / 180);
+
+  // dust drifts and fades with the light
+  dust.material.opacity = 0.1 + 0.28 * Math.min(1, glow + 0.35 * (moon.intensity > 1 ? 1 : 0));
+  const a = dustGeo.attributes.position.array;
   for (let i = 0; i < DUST; i++) {
     a[i * 3 + 1] -= dt * (0.015 + 0.02 * ((i * 7) % 5) / 5);
     a[i * 3] += Math.sin(t * 0.3 + i) * dt * 0.02;
     if (a[i * 3 + 1] < 0) a[i * 3 + 1] = 4.8;
   }
   dustGeo.attributes.position.needsUpdate = true;
+
+  // "F: light switch" hint when you're near it
+  $('prompt2').style.display = (joined && !controlsOpen && Math.hypot(me.position.x - 5.6, me.position.z - SW_Z) < 2.4) ? 'block' : 'none';
 
   updateTvStatic(t, faulting);
 }
@@ -521,21 +794,80 @@ scene.add(screen);
 const tvPick = [tvBody, screen];
 
 // ---------- players ----------
-function makePlayer(color) {
-  const g = new THREE.Group();
-  const mat = new THREE.MeshLambertMaterial({ color });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1, 0.5), mat);
-  body.position.y = 0.7;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 16), mat);
-  head.position.y = 1.55;
-  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.2), new THREE.MeshLambertMaterial({ color: 0xffffff }));
-  nose.position.set(0, 1.55, 0.35); // shows which way it faces
-  g.add(body, head, nose);
+function makePlayer(color, variant = 0) {
+  // cute chibi critter: round bean body, big head, glossy eyes, blush, ears, tiny tail
+  const g = new THREE.Group(), rig = new THREE.Group();
+  const base = new THREE.Color(color);
+  const std = (c, em, rough) => new THREE.MeshStandardMaterial({ color: c, roughness: rough == null ? 0.75 : rough, emissive: new THREE.Color(c).multiplyScalar(em == null ? 0.16 : em) });
+  const mBody = std(base), mLight = std(base.clone().lerp(new THREE.Color(0xffffff), 0.65), 0.2);
+  const mPink = std(0xff9bb0, 0.35), mEye = new THREE.MeshStandardMaterial({ color: 0x14161e, roughness: 0.2 });
+  const mWhite = new THREE.MeshBasicMaterial({ color: 0xffffff }), mDark = new THREE.MeshBasicMaterial({ color: 0x3b2b2e });
+  const S = new THREE.SphereGeometry(1, 20, 14);
+  const ball = (mat, x, y, z, sx, sy, sz, parent) => {
+    const m = new THREE.Mesh(S, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); (parent || rig).add(m); return m;
+  };
+  ball(mBody, 0, 0.55, 0, 0.45, 0.5, 0.42);          // body
+  ball(mLight, 0, 0.5, 0.15, 0.3, 0.34, 0.3);        // belly
+  ball(mBody, 0, 1.28, 0, 0.52, 0.47, 0.5);          // big head
+  ball(mLight, 0, 0.42, -0.4, 0.12, 0.12, 0.12);     // tail
+  const tail = rig.children[rig.children.length - 1];
+
+  // ears
+  for (const sx of [-1, 1]) {
+    if (variant === 0) { ball(mBody, sx * 0.34, 1.68, -0.02, 0.15, 0.15, 0.09); ball(mPink, sx * 0.34, 1.68, 0.06, 0.09, 0.09, 0.04); }
+    else if (variant === 1) {
+      const c = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.34, 4), mBody);
+      c.position.set(sx * 0.3, 1.72, 0); c.rotation.set(0, Math.PI / 4, -sx * 0.3); rig.add(c);
+      ball(mPink, sx * 0.29, 1.68, 0.08, 0.07, 0.11, 0.02);
+    } else { ball(mBody, sx * 0.2, 1.95, -0.02, 0.1, 0.3, 0.07).rotation.z = -sx * 0.15; ball(mPink, sx * 0.2, 1.93, 0.04, 0.05, 0.22, 0.03).rotation.z = -sx * 0.15; }
+  }
+  // eyes (grouped so they can blink), with two sparkle highlights each
+  const eyes = [];
+  for (const sx of [-1, 1]) {
+    const eg = new THREE.Group(); eg.position.set(sx * 0.19, 1.31, 0.43);
+    ball(mEye, 0, 0, 0, 0.085, 0.105, 0.06, eg);
+    ball(mWhite, 0.025, 0.04, 0.035, 0.028, 0.028, 0.02, eg);
+    ball(mWhite, -0.022, -0.03, 0.04, 0.013, 0.013, 0.012, eg);
+    rig.add(eg); eyes.push(eg);
+    ball(mPink, sx * 0.3, 1.2, 0.385, 0.075, 0.05, 0.03);   // blush
+  }
+  ball(mLight, 0, 1.19, 0.42, 0.13, 0.09, 0.09);             // muzzle
+  ball(mDark, 0, 1.215, 0.5, 0.04, 0.03, 0.025);             // nose
+  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.008, 6, 14, Math.PI), mDark);
+  smile.rotation.z = Math.PI; smile.position.set(0, 1.18, 0.505); rig.add(smile);
+
+  // arms + feet on pivots so they can swing
+  const pivot = (x, y, mat, sx, sy, sz, ox, oy, oz) => {
+    const p = new THREE.Group(); p.position.set(x, y, 0); ball(mat, ox, oy, oz, sx, sy, sz, p); rig.add(p); return p;
+  };
+  const armL = pivot(-0.42, 0.82, mBody, 0.12, 0.21, 0.12, -0.04, -0.18, 0);
+  const armR = pivot(0.42, 0.82, mBody, 0.12, 0.21, 0.12, 0.04, -0.18, 0);
+  armL.rotation.z = -0.25; armR.rotation.z = 0.25;
+  const footL = pivot(-0.2, 0.2, mLight, 0.15, 0.1, 0.2, 0, -0.1, 0.06);
+  const footR = pivot(0.2, 0.2, mLight, 0.15, 0.1, 0.2, 0, -0.1, 0.06);
+
+  g.add(rig);
+  g.userData = { rig, armL, armR, footL, footR, eyes, tail, phase: Math.random() * 10 };
   scene.add(g);
   return g;
 }
 
-const me = makePlayer(0x3aa0ff);
+function animateChar(g, moving, t) {
+  const u = g.userData; if (!u.rig) return;
+  const ph = t * 11 + u.phase, sw = moving ? Math.sin(ph) : 0;
+  u.rig.position.y = moving ? Math.abs(Math.sin(ph)) * 0.07 : Math.sin(t * 2 + u.phase) * 0.012;  // hop / breathe
+  u.rig.rotation.z = moving ? Math.sin(ph) * 0.07 : 0;
+  u.rig.rotation.x = moving ? 0.08 : 0;
+  u.footL.rotation.x = sw * 0.7; u.footR.rotation.x = -sw * 0.7;
+  u.armL.rotation.x = -sw * 0.9; u.armR.rotation.x = sw * 0.9;
+  u.armL.rotation.z = -0.25 - (moving ? 0 : Math.sin(t * 1.7 + u.phase) * 0.05);
+  u.armR.rotation.z = 0.25 + (moving ? 0 : Math.sin(t * 1.7 + u.phase) * 0.05);
+  u.tail.position.x = Math.sin(t * (moving ? 12 : 3) + u.phase) * 0.05;
+  const blink = ((t + u.phase) % 4.2) < 0.12 ? 0.1 : 1;
+  for (const e of u.eyes) e.scale.y = blink;
+}
+
+const me = makePlayer(0x8fd0ff, 0);
 me.position.set(0, 0, 3);
 me.rotation.y = Math.PI; // face the TV
 
@@ -543,7 +875,7 @@ const remotes = {}; // id -> { mesh, x, z, ry }
 function getRemote(id) {
   if (!remotes[id]) {
     const hue = [...id].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
-    const mesh = makePlayer(new THREE.Color(`hsl(${hue}, 70%, 55%)`));
+    const mesh = makePlayer(new THREE.Color(`hsl(${hue}, 80%, 74%)`), hue % 3);
     remotes[id] = { mesh, x: 0, z: 3, ry: 0 };
   }
   return remotes[id];
@@ -621,6 +953,7 @@ addEventListener('keydown', (e) => {
   if (!joined || typing(e)) return;
   const k = e.key.toLowerCase();
   if (k === 'v') toggleCamera();
+  else if (k === 'f') toggleLight();
   else if (k === 'e') { if (controlsOpen) closeControls(); else if (pickTV()) openControls(); }
   else keys[k] = true;
 });
@@ -639,6 +972,7 @@ addEventListener('mousemove', (e) => {
 });
 addEventListener('mousedown', (e) => {
   if (!joined || e.button !== 0 || e.target.closest('.bar, #join, #tv')) return;
+  if (pickSwitch(e)) { toggleLight(); return; }          // click the light switch
   if (locked) { if (pickTV()) openControls(); }          // click on the TV while looking around
   else if (pickTV(e)) openControls();                    // click on the TV with the cursor
   else { if (controlsOpen) closeControls(); lockMouse(); } // click anywhere else: mouse look
@@ -857,10 +1191,13 @@ function loop(now) {
 
   for (const id in remotes) {
     const r = remotes[id];
+    const moving = Math.hypot(r.x - r.mesh.position.x, r.z - r.mesh.position.z) > 0.02;
     r.mesh.position.x += (r.x - r.mesh.position.x) * 0.3;
     r.mesh.position.z += (r.z - r.mesh.position.z) * 0.3;
     r.mesh.rotation.y = r.ry;
+    animateChar(r.mesh, moving, now / 1000);
   }
+  animateChar(me, !!(fw || st), now / 1000);
 
   animateEnvironment(now / 1000);
   updateCamera(dt);
