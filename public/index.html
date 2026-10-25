@@ -221,7 +221,7 @@ let joined = false, controlsOpen = false, locked = false;
 let mode = 'third';              // 'third' | 'first'
 let yaw = 0, pitch = -0.25;      // look angles (yaw 0 = facing the TV wall)
 let camDist = 4.5;               // current camera distance behind the head (0 = first person)
-const TP_DIST = 4.5, HEAD_Y = 1.55, SENS = 0.0022;
+const TP_DIST = 4.5, HEAD_Y = 1.3, SENS = 0.0022;
 
 // ---------- 3D scene ----------
 const scene = new THREE.Scene(); // no background: the canvas is transparent (page colour shows through)
@@ -947,14 +947,15 @@ scene.add(screen);
 const tvPick = [tvBody, screen];
 
 // ---------- two chairs, side by side, close enough to the TV ----------
-const CHAIRS = [{ x: -0.36, z: -3.0 }, { x: 0.36, z: -3.0 }]; // seat height 0.36, facing the TV (-z)
+const CHAIRS = [{ x: -0.445, z: -1.4 }, { x: 0.445, z: -1.4 }]; // big chairs (x1.5): seat 0.54 high, 0.75 wide, ~4.1 m from the screen, facing the TV (-z)
+const SEAT_DZ = 0.05;
 (function buildChairs() {
   const metal = new THREE.MeshStandardMaterial({ color: 0x5d656c, roughness: 0.5, metalness: 0.5 });
   const vinyl = new THREE.MeshStandardMaterial({ map: fabricTex(31, '#4a544f', 10), roughness: 0.65 });
   const gSeat = new THREE.BoxGeometry(0.5, 0.06, 0.48), gBack = new THREE.BoxGeometry(0.5, 0.46, 0.05);
   const gLeg = new THREE.CylinderGeometry(0.018, 0.018, 0.34, 6), gPost = new THREE.CylinderGeometry(0.018, 0.018, 0.5, 6), gBar = new THREE.CylinderGeometry(0.014, 0.014, 0.4, 6);
   for (const c of CHAIRS) {
-    const g = new THREE.Group(); g.position.set(c.x, 0, c.z);
+    const g = new THREE.Group(); g.position.set(c.x, 0, c.z); g.scale.set(1.5, 1.5, 1.5);
     const seat = new THREE.Mesh(gSeat, vinyl); seat.position.y = 0.33;
     const back = new THREE.Mesh(gBack, vinyl); back.position.set(0, 0.62, 0.235); back.rotation.x = 0.1; // reclined a little
     g.add(seat, back);
@@ -969,180 +970,187 @@ const CHAIRS = [{ x: -0.36, z: -3.0 }, { x: 0.36, z: -3.0 }]; // seat height 0.3
 })();
 
 
-// ---------- players: gaunt, hollow-eyed patients ----------
+// ---------- players: cute-but-wrong chibi twins. SHADE is black, PALE is white; colours follow join order ----------
 function shadowTexture() {
   const c = mkCanvas(64, 64), g = c.getContext('2d');
   blob(g, 32, 32, 32, 'rgba(0,0,0,0.7)', 'rgba(0,0,0,0)');
   return new THREE.CanvasTexture(c);
 }
-const PG = { // geometry and materials are shared by every player (cheap to draw)
-  sph: new THREE.SphereGeometry(1, 14, 10),
-  cyl: new THREE.CylinderGeometry(1, 1, 1, 8),
-  box: new THREE.BoxGeometry(1, 1, 1),
+const PG = { // geometry + materials are shared by every player (cheap to draw)
+  sph: new THREE.SphereGeometry(1, 16, 12),
   cone: new THREE.ConeGeometry(1, 1, 8),
-  ring: new THREE.TorusGeometry(1, 0.1, 6, 18),
-  shadow: new THREE.CircleGeometry(0.55, 20),
-  gown: (function () { // hospital gown with a ragged hem
-    const g = new THREE.CylinderGeometry(0.24, 0.38, 1.0, 14, 3, true), p = g.attributes.position;
-    for (let i = 0; i < p.count; i++) {
-      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-      if (y < -0.45) { const a = Math.atan2(z, x); p.setY(i, y - 0.11 * Math.abs(Math.sin(a * 3.5 + 0.6)) - 0.03 * hash(Math.round(a * 10))); }
-    }
-    g.computeVertexNormals();
-    return g;
-  })()
+  box: new THREE.BoxGeometry(1, 1, 1),
+  ring: new THREE.TorusGeometry(1, 0.1, 6, 20),
+  shadow: new THREE.CircleGeometry(0.6, 20)
 };
-const PM = {
-  skin: new THREE.MeshStandardMaterial({ color: 0xaeb3a8, roughness: 0.9, emissive: 0x0b0d0a }),
-  gown: new THREE.MeshStandardMaterial({ color: 0x80898d, roughness: 1, emissive: 0x0a0c0d, side: THREE.DoubleSide }),
-  stain: new THREE.MeshStandardMaterial({ color: 0x3b1d18, roughness: 1 }),
-  dark: new THREE.MeshBasicMaterial({ color: 0x020203 }),
-  thread: new THREE.MeshBasicMaterial({ color: 0x0d0d0e }),
-  band: new THREE.MeshStandardMaterial({ color: 0xaaa490, roughness: 1, emissive: 0x15140f }),
-  hair: new THREE.MeshStandardMaterial({ color: 0x0c0b0a, roughness: 1 }),
-  shade: new THREE.MeshStandardMaterial({ color: 0x6b7068, roughness: 1 }),
-  mask: new THREE.MeshStandardMaterial({ color: 0xd9d6cb, roughness: 0.45, emissive: 0x14130f }),
-  sack: new THREE.MeshStandardMaterial({ color: 0x7e6b4d, roughness: 1, emissive: 0x120d08 }),
-  shadow: new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false })
+const mstd = (c, o) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.8 }, o || {}));
+const mbas = (c, fog) => new THREE.MeshBasicMaterial({ color: c, fog: fog !== false });
+const SHADOW_MAT = new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false });
+const MT = {
+  black: {
+    body: mstd(0x0d0d12, { roughness: 0.35, emissive: 0x08080e }), belly: mstd(0x1e1f2a, { roughness: 0.5, emissive: 0x0a0a10 }),
+    tooth: mbas(0xf6f4ee), pupil: mbas(0x000000), red: mstd(0xc0151d, { roughness: 0.55, emissive: 0x4a060a }),
+    thread: mbas(0xe9e7e0), crack: mbas(0xd9d6cf), earIn: mstd(0x5a0c12, { emissive: 0x240408 })
+  },
+  white: {
+    body: mstd(0xf1efe9, { roughness: 0.85, emissive: 0x24241f }), belly: mstd(0xd9d6cc, { emissive: 0x161612 }),
+    hole: mbas(0x030304), red: mstd(0xc0151d, { roughness: 0.55, emissive: 0x4a060a }), blush: mstd(0xd05a64, { emissive: 0x3a1014 }),
+    thread: mbas(0x0a0a0b), band: mstd(0xb8b29c, { emissive: 0x1a1812 }), earIn: mstd(0x8d2d35, { emissive: 0x2a0a0d }),
+    bow: mstd(0x0b0b0e, { roughness: 0.4, emissive: 0x08080a })
+  }
 };
 
-// variant 0 = hollow (sockets, stitched grin, lank hair) | 1 = sack head | 2 = bandaged | 3 = cracked porcelain smile mask
-function makePlayer(color, variant = 0) {
-  const g = new THREE.Group(), rig = new THREE.Group();
-  const col = new THREE.Color(color);
-  const glowBase = col.clone().lerp(new THREE.Color(0xffffff), 0.25);
-  const glowMat = new THREE.MeshBasicMaterial({ color: glowBase.clone(), fog: false });   // the only colour on them: glowing pupils
-  const bandMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.6, emissive: col.clone().multiplyScalar(0.7) }); // patient wristband
+// builds one complete body for a tone; a player carries both and shows the one its colour slot asks for
+function buildTone(tone) {
+  const isB = tone === 'black', M = MT[tone], rig = new THREE.Group();
+  const glowBase = new THREE.Color(isB ? 0xffffff : 0xff2b2b);
+  const glowMat = new THREE.MeshBasicMaterial({ color: glowBase.clone(), fog: false }); // the one thing that glows
   const add = (geo, mat, x, y, z, sx, sy, sz, parent) => {
     const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); (parent || rig).add(m); return m;
   };
+  // body: round bean with a belly patch
+  add(PG.sph, M.body, 0, 0.62, 0, 0.34, 0.38, 0.31);
+  add(PG.sph, M.belly, 0, 0.58, 0.14, 0.24, 0.27, 0.2);
+  const bz = (x, y) => 0.14 + 0.2 * Math.sqrt(Math.max(0.02, 1 - (x / 0.24) * (x / 0.24) - ((y - 0.58) / 0.27) * ((y - 0.58) / 0.27))) + 0.004;
+  for (let i = -3; i <= 3; i++) add(PG.box, isB ? M.thread : M.red, i * 0.06, 0.5, bz(i * 0.06, 0.5), 0.008, 0.07, 0.008); // sewn-up belly seam
 
-  // gown, hunched back, old stains
-  add(PG.gown, PM.gown, 0, 1.02, 0, 1, 1, 1);
-  add(PG.sph, PM.gown, 0, 1.36, -0.13, 0.2, 0.17, 0.16);
-  add(PG.sph, PM.stain, 0.09, 1.0, 0.31, 0.07, 0.15, 0.015);
-  add(PG.sph, PM.stain, -0.12, 0.72, 0.34, 0.05, 0.09, 0.015);
-  add(PG.cyl, PM.skin, 0, 1.55, 0.02, 0.04, 0.14, 0.04); // thin neck
-
-  // head on a pivot so it can tilt and twitch
-  const head = new THREE.Group(); head.position.set(0, 1.6, 0.03); rig.add(head);
-  const sack = variant === 1;
-  const sx = sack ? 0.2 : 0.185, sy = sack ? 0.28 : 0.26, sz = sack ? 0.22 : 0.205;
-  add(PG.sph, sack ? PM.sack : variant === 3 ? PM.mask : PM.skin, 0, 0.17, 0.02, sx, sy, sz, head);
-  const fz = (x, y) => 0.02 + sz * Math.sqrt(Math.max(0.02, 1 - (x / sx) * (x / sx) - ((y - 0.17) / sy) * ((y - 0.17) / sy))) + 0.004; // face surface depth
-  const eyes = [], hairG = new THREE.Group(); head.add(hairG);
-  const hole = (x) => {
-    add(PG.sph, PM.dark, x, 0.2, fz(x, 0.2) - 0.012, 0.052, 0.068, 0.03, head);
-    const eg = new THREE.Group(); eg.position.set(x, 0.2, fz(x, 0.2) + 0.012);
-    add(PG.sph, glowMat, 0, 0, 0, 0.016, 0.02, 0.012, eg); head.add(eg); eyes.push(eg);
+  // big head on a pivot
+  const head = new THREE.Group(); head.position.set(0, 1.2, 0); rig.add(head);
+  add(PG.sph, M.body, 0, 0, 0, 0.5, 0.44, 0.46, head);
+  const fz = (x, y) => 0.46 * Math.sqrt(Math.max(0.02, 1 - (x / 0.5) * (x / 0.5) - (y / 0.44) * (y / 0.44))) + 0.004; // face surface depth (y relative to head centre)
+  const eyes = [], pupils = [], ears = [];
+  const eye = (x, y, rx, ry, mat) => {
+    const eg = new THREE.Group(); eg.position.set(x, y, fz(x, y) - 0.015); head.add(eg);
+    add(PG.sph, mat, 0, 0, 0, rx, ry, 0.05, eg); eyes.push(eg); return eg;
   };
-  if (variant === 0 || variant === 2) for (const sgn of [-1, 1]) add(PG.sph, PM.shade, sgn * 0.088, 0.085, fz(sgn * 0.088, 0.085) - 0.012, 0.045, 0.06, 0.02, head); // sunken cheeks
-  if (variant === 0) {
-    hole(-0.075); hole(0.075);
-    for (let i = 0; i < 16; i++) { // long lank hair, parted over the face
-      const th = (i / 16) * Math.PI * 2; if (Math.abs(Math.atan2(Math.sin(th), Math.cos(th))) < 0.55) continue;
-      const L = 0.3 + hash(i * 3.3) * 0.16, rx = 0.152, rz = 0.168;
-      const s = add(PG.box, PM.hair, Math.sin(th) * (rx + 0.01), 0.3 - L / 2, 0.02 + Math.cos(th) * (rz + 0.01), 0.026, L, 0.008, hairG);
-      s.rotation.y = th; s.rotation.z = Math.sin(th) * 0.06;
+
+  if (isB) {
+    // SHADE: huge white glowing eyes with tiny pupils (one bigger than the other), cheshire grin of needle teeth
+    for (const [x, rx, ry] of [[-0.2, 0.13, 0.17], [0.2, 0.16, 0.2]]) {
+      const eg = eye(x, 0.04, rx, ry, glowMat);
+      const p = add(PG.sph, M.pupil, 0, -0.05, 0.04, 0.035, 0.05, 0.02, eg); p.userData.by = -0.05; pupils.push(p);
     }
-    add(PG.box, PM.dark, 0, 0.115, fz(0, 0.115), 0.012, 0.05, 0.01, head);
-    for (let i = -3; i <= 3; i++) { // wide stitched grin
-      const x = i * 0.026, y = 0.035 + Math.pow(x / 0.1, 2) * 0.03;
-      add(PG.box, PM.dark, x, y, fz(x, y), 0.03, 0.012, 0.008, head);
-      add(PG.box, PM.thread, x, y, fz(x, y) + 0.003, 0.005, 0.06, 0.006, head);
+    for (let i = -4; i <= 4; i++) { // top row
+      const x = i * 0.055, y = -0.2 + Math.pow(x / 0.25, 2) * 0.1;
+      add(PG.cone, M.tooth, x, y - 0.03, fz(x, y) + 0.004, 0.02, 0.06, 0.02, head).rotation.x = Math.PI;
     }
-  } else if (variant === 3) { // porcelain mask: tiny pinhole eyes, painted smile, cracks, tear streaks
-    hole(-0.07); hole(0.07);
-    for (let i = -4; i <= 4; i++) { const x = i * 0.02, y = 0.05 + Math.pow(x / 0.09, 2) * 0.05;
-      add(PG.box, PM.dark, x, y, fz(x, y), 0.022, 0.011, 0.006, head).rotation.z = Math.atan(12.3 * x); }
-    add(PG.sph, PM.dark, 0, 0.12, fz(0, 0.12), 0.01, 0.012, 0.006, head);
-    for (const [cx, cy, len, rot] of [[0.05, 0.34, 0.1, 0.4], [-0.09, 0.3, 0.08, -0.5], [0.1, 0.27, 0.07, 0.2]])
-      add(PG.box, PM.dark, cx, cy, fz(cx, cy) + 0.002, 0.004, len, 0.004, head).rotation.z = rot;
-    for (const sgn of [-1, 1]) add(PG.box, PM.stain, sgn * 0.07, 0.1, fz(sgn * 0.07, 0.1) + 0.002, 0.008, 0.13, 0.004, head);
-  } else if (variant === 1) {
-    hole(0.075);
-    for (const a of [0.8, -0.8]) add(PG.box, PM.thread, -0.075, 0.2, fz(-0.075, 0.2) + 0.004, 0.07, 0.01, 0.006, head).rotation.z = a; // stitched-X eye
-    add(PG.box, PM.thread, 0, 0.04, fz(0, 0.04) + 0.003, 0.17, 0.008, 0.006, head);
-    for (let i = -3; i <= 3; i++) { const x = i * 0.027, y = 0.04; add(PG.box, PM.thread, x, y, fz(x, y) + 0.004, 0.005, 0.05, 0.006, head).rotation.z = i % 2 ? 0.35 : -0.35; }
-    add(PG.cone, PM.sack, 0.01, 0.46, 0.02, 0.07, 0.14, 0.07, head).rotation.z = -0.35; // pinched top of the sack
-    add(PG.ring, PM.band, 0, -0.02, 0.02, 0.15, 0.16, 0.35, head).rotation.x = Math.PI / 2; // rope at the neck
+    for (let i = -4; i < 4; i++) { // bottom row, smaller
+      const x = (i + 0.5) * 0.055, y = -0.26 + Math.pow(x / 0.25, 2) * 0.1;
+      add(PG.cone, M.tooth, x, y + 0.03, fz(x, y) + 0.002, 0.015, 0.045, 0.015, head);
+    }
+    for (const sg of [-1, 1]) { // cat ears, red inside
+      const e = new THREE.Group(); e.position.set(sg * 0.33, 0.4, 0); e.userData.base = sg * -0.32; e.rotation.z = e.userData.base; head.add(e); ears.push(e);
+      add(PG.cone, M.body, 0, 0.14, 0, 0.17, 0.36, 0.17, e);
+      add(PG.cone, M.earIn, 0, 0.1, 0.07, 0.09, 0.22, 0.05, e);
+    }
+    add(PG.box, M.crack, 0.12, 0.3, fz(0.12, 0.3) + 0.002, 0.007, 0.2, 0.004, head).rotation.z = 0.5;   // hairline cracks
+    add(PG.box, M.crack, -0.2, 0.28, fz(-0.2, 0.28) + 0.002, 0.007, 0.15, 0.004, head).rotation.z = -0.3;
+    add(PG.box, M.red, -0.2, -0.24, fz(-0.2, -0.24) + 0.003, 0.014, 0.2, 0.006, head);                 // a red tear running from the small eye
+    add(PG.sph, M.red, -0.2, -0.35, fz(-0.2, -0.35) + 0.003, 0.02, 0.026, 0.008, head);
+    // red scarf
+    add(PG.ring, M.red, 0, 0.78, 0.0, 0.31, 0.28, 0.45).rotation.x = Math.PI / 2;
+    add(PG.box, M.red, 0.18, 0.62, 0.29, 0.1, 0.28, 0.02).rotation.z = 0.2;
   } else {
-    hole(0.075);
-    add(PG.box, PM.band, -0.075, 0.2, fz(-0.075, 0.2) + 0.006, 0.1, 0.11, 0.012, head);   // gauze over the left eye
-    add(PG.sph, PM.stain, -0.07, 0.2, fz(-0.075, 0.2) + 0.014, 0.025, 0.035, 0.004, head);
-    for (const [y, tilt] of [[-0.04, 0.1], [0.3, -0.12], [0.37, 0.1], [0.1, -0.2]]) { // bandage wraps
-      const f = Math.sqrt(Math.max(0.05, 1 - Math.pow((y - 0.17) / sy, 2)));
-      add(PG.ring, PM.band, 0, y, 0.02, sx * f + 0.006, sz * f + 0.006, 0.3, head).rotation.x = Math.PI / 2 + tilt;
+    // PALE: one black button eye sewn on with red thread, one hollow eye with a tiny red glow, stitched smile, blush
+    const bt = eye(-0.2, 0.04, 0.14, 0.17, M.hole);
+    for (const a of [0.8, -0.8]) add(PG.box, M.red, 0, 0, 0.05, 0.2, 0.012, 0.01, bt).rotation.z = a;
+    const he = eye(0.2, 0.04, 0.16, 0.21, M.hole);
+    const p = add(PG.sph, glowMat, 0, -0.03, 0.045, 0.04, 0.05, 0.02, he); p.userData.by = -0.03; pupils.push(p);
+    for (let i = -3; i <= 3; i++) { // tiny stitched mouth
+      const x = i * 0.034, y = -0.2 + Math.pow(x / 0.1, 2) * 0.04;
+      add(PG.box, M.thread, x, y, fz(x, y) + 0.002, 0.036, 0.011, 0.006, head).rotation.z = Math.atan(2 * x / 0.01 * 0.04);
+      add(PG.box, M.thread, x, y, fz(x, y) + 0.004, 0.006, 0.07, 0.006, head);
     }
-    add(PG.sph, PM.dark, 0, 0.035, fz(0, 0.035) - 0.01, 0.05, 0.07, 0.025, head);          // slack open mouth
+    for (const sg of [-1, 1]) { // blush with little stitches
+      const x = sg * 0.33, y = -0.1;
+      add(PG.sph, M.blush, x, y, fz(x, y) - 0.005, 0.09, 0.06, 0.02, head);
+      for (let k = -1; k <= 1; k++) add(PG.box, M.thread, x + k * 0.03, y, fz(x, y) + 0.015, 0.005, 0.05, 0.004, head).rotation.z = 0.5;
+    }
+    // long bunny ears: the right one stands, the left one is broken and bandaged
+    const er = new THREE.Group(); er.position.set(0.22, 0.38, 0); er.userData.base = -0.28; er.rotation.z = er.userData.base; head.add(er); ears.push(er);
+    add(PG.sph, M.body, 0, 0.4, 0, 0.1, 0.42, 0.055, er); add(PG.sph, M.earIn, 0, 0.38, 0.03, 0.055, 0.3, 0.02, er);
+    const el = new THREE.Group(); el.position.set(-0.22, 0.38, 0); el.userData.base = 0.3; el.rotation.z = el.userData.base; head.add(el); ears.push(el);
+    add(PG.sph, M.body, 0, 0.22, 0, 0.1, 0.25, 0.055, el);
+    const bend = new THREE.Group(); bend.position.set(0, 0.45, 0); bend.rotation.z = 1.15; el.add(bend);
+    add(PG.sph, M.body, 0, 0.17, 0, 0.09, 0.21, 0.05, bend); add(PG.sph, M.earIn, 0, 0.15, 0.03, 0.05, 0.14, 0.02, bend);
+    add(PG.box, M.band, 0, 0.45, 0, 0.17, 0.06, 0.09, el);
+    // forehead bandage + hairline cracks
+    add(PG.box, M.band, 0.16, 0.3, fz(0.16, 0.3) + 0.006, 0.2, 0.07, 0.012, head).rotation.z = 0.45;
+    add(PG.sph, M.red, 0.2, 0.31, fz(0.2, 0.31) + 0.014, 0.025, 0.02, 0.004, head);
+    add(PG.box, M.thread, -0.14, 0.31, fz(-0.14, 0.31) + 0.002, 0.007, 0.17, 0.004, head).rotation.z = -0.4;
+    // black bow at the neck
+    for (const sg of [-1, 1]) add(PG.cone, M.bow, sg * 0.1, 0.78, 0.29, 0.1, 0.14, 0.05).rotation.z = -sg * Math.PI / 2;
+    add(PG.sph, M.bow, 0, 0.78, 0.3, 0.05, 0.05, 0.05);
   }
 
-  // long thin arms, wristband on the right one
-  const mkArm = (x, right) => {
-    const p = new THREE.Group(); p.position.set(x, 1.43, 0); rig.add(p);
-    add(PG.cyl, PM.gown, 0, -0.07, 0, 0.055, 0.22, 0.055, p);
-    add(PG.cyl, PM.skin, 0, -0.45, 0, 0.03, 0.62, 0.03, p);
-    add(PG.sph, PM.skin, 0, -0.78, 0, 0.04, 0.07, 0.025, p);
-    for (const fx of [-0.024, -0.008, 0.008, 0.024]) { const f = add(PG.cyl, PM.skin, fx, -0.9, 0.012, 0.006, 0.12, 0.006, p); f.rotation.z = fx * 5; f.rotation.x = 0.18; } // long curled fingers
-    if (right) add(PG.ring, bandMat, 0, -0.7, 0, 0.04, 0.04, 0.2, p).rotation.x = Math.PI / 2;
+  // stubby arms and legs on pivots
+  const mkArm = (x) => {
+    const p = new THREE.Group(); p.position.set(x, 0.8, 0); rig.add(p);
+    add(PG.sph, M.body, 0, -0.14, 0, 0.09, 0.2, 0.09, p); add(PG.sph, M.body, 0, -0.3, 0, 0.1, 0.1, 0.1, p);
+    if (isB) for (const cx of [-0.04, 0, 0.04]) add(PG.cone, M.tooth, cx, -0.4, 0.01, 0.014, 0.06, 0.014, p).rotation.x = Math.PI; // tiny claws
     return p;
   };
-  const armL = mkArm(-0.27, false), armR = mkArm(0.27, true);
-  armL.rotation.z = -0.08; armR.rotation.z = 0.08;
-  // bare, bony legs
+  const armL = mkArm(-0.37), armR = mkArm(0.37); armL.rotation.z = -0.28; armR.rotation.z = 0.28;
   const mkLeg = (x) => {
-    const p = new THREE.Group(); p.position.set(x, 0.56, 0); rig.add(p);
-    add(PG.cyl, PM.skin, 0, -0.14, 0, 0.048, 0.28, 0.048, p);          // thigh
-    const k = new THREE.Group(); k.position.y = -0.28; p.add(k); p.userData.knee = k;
-    add(PG.sph, PM.skin, 0, 0, 0, 0.05, 0.05, 0.05, k);                // knobbly knee
-    add(PG.cyl, PM.skin, 0, -0.14, 0, 0.04, 0.28, 0.04, k);            // shin
-    add(PG.sph, PM.skin, 0, -0.28, 0.04, 0.05, 0.03, 0.1, k);          // foot
+    const p = new THREE.Group(); p.position.set(x, 0.35, 0); rig.add(p);
+    add(PG.sph, M.body, 0, -0.14, 0, 0.11, 0.18, 0.11, p); add(PG.sph, M.body, 0, -0.3, 0.06, 0.13, 0.07, 0.18, p);
     return p;
   };
-  const footL = mkLeg(-0.12), footR = mkLeg(0.12);
-  // loose strap of the gown, sways behind them
-  const tail = new THREE.Group(); tail.position.set(0, 0.62, -0.36); rig.add(tail);
-  add(PG.box, PM.gown, 0, -0.15, 0, 0.07, 0.34, 0.01, tail);
+  const legL = mkLeg(-0.17), legR = mkLeg(0.17);
+  const tail = new THREE.Group(); tail.position.set(0, 0.45, -0.3); rig.add(tail);
+  if (isB) { add(PG.sph, M.body, 0, 0.12, -0.04, 0.06, 0.22, 0.06, tail); add(PG.sph, M.red, 0, 0.32, -0.06, 0.05, 0.05, 0.05, tail); }
+  else add(PG.sph, M.body, 0, 0, -0.05, 0.14, 0.14, 0.14, tail); // round bobtail
+  rig.visible = false;
+  return { rig, head, armL, armR, legL, legR, eyes, pupils, ears, tail, glowMat, glowBase };
+}
 
-  const sh = new THREE.Mesh(PG.shadow, PM.shadow); sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; g.add(sh); // cheap contact shadow
-  g.add(rig);
-  g.userData = { rig, head, hair: hairG, armL, armR, footL, footR, eyes, tail, glowMat, glowBase, phase: Math.random() * 10, bubble: null, sit: 0, lastT: 0, css: '#' + col.getHexString() };
+function setTone(g, tone) {
+  const u = g.userData; if (u.tone === tone) return;
+  if (u.P) u.P.rig.visible = false;
+  u.tone = tone; u.P = u.tones[tone]; u.P.rig.visible = true;
+  u.css = tone === 'white' ? '#f1efe8' : '#8d97a8';
+}
+function makePlayer() {
+  const g = new THREE.Group();
+  const tones = { black: buildTone('black'), white: buildTone('white') };
+  g.add(tones.black.rig, tones.white.rig);
+  const sh = new THREE.Mesh(PG.shadow, SHADOW_MAT); sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; g.add(sh);
+  g.userData = { tones, P: null, tone: null, phase: Math.random() * 10, bubble: null, sit: 0, lastT: 0, css: '#8d97a8' };
+  setTone(g, 'black');
   scene.add(g);
   return g;
 }
 
 function animateChar(g, moving, t, seated) {
-  const u = g.userData; if (!u.rig) return;
+  const u = g.userData, P = u.P; if (!P) return;
   const dts = Math.min(0.1, Math.max(0, t - (u.lastT || t))); u.lastT = t;
   u.sit += ((seated ? 1 : 0) - u.sit) * Math.min(1, dts * 7); // eases into / out of the chair
   const sit = u.sit, up = 1 - sit;
   if (seated) moving = false;
-  const ph = t * 6.5 + u.phase, sw = moving ? Math.sin(ph) : 0, br = Math.sin(t * 1.3 + u.phase);
-  u.rig.position.y = ((moving ? Math.abs(Math.sin(ph)) * 0.025 : br * 0.006)) * up - 0.2 * sit;
-  u.rig.rotation.x = (moving ? 0.16 : 0.07 + br * 0.01) * up + 0.1 * sit;     // hunched, leaning forward
-  u.rig.rotation.z = (moving ? Math.sin(ph) * 0.05 : Math.sin(t * 0.4 + u.phase) * 0.015) * up;
-  // legs: hip + knee. Walking = slow shuffle, sitting = thighs forward, shins down
-  u.footL.rotation.x = sw * 0.5 * up - 1.5 * sit;
-  u.footR.rotation.x = -sw * 0.5 * up - 1.5 * sit;
-  u.footL.userData.knee.rotation.x = Math.max(0, sw * 0.5) * 0.9 * up + 1.5 * sit;
-  u.footR.userData.knee.rotation.x = Math.max(0, -sw * 0.5) * 0.9 * up + 1.5 * sit;
-  const sway = Math.sin(t * 0.9 + u.phase) * 0.02;
-  const k = Math.floor(t * 5 + u.phase * 3), tw = hash(k + u.phase) > 0.94 ? 1 : 0;   // twitch moments
-  u.armL.rotation.x = (0.12 - sw * 0.18) * up - 0.5 * sit;
-  u.armR.rotation.x = (0.12 + sw * 0.18) * up - 0.5 * sit + tw * (hash(k * 3.1) - 0.5) * 0.4;
-  u.armL.rotation.z = -0.08 - sway; u.armR.rotation.z = 0.08 + sway;
-  // head drifts slowly, then every so often snaps sideways; tips back to stare at the TV when seated
-  u.head.rotation.z = 0.16 + Math.sin(t * 0.6 + u.phase) * 0.05 + tw * (hash(k * 1.7) - 0.5) * 0.5;
-  u.head.rotation.y = Math.sin(t * 0.35 + u.phase) * (moving ? 0.1 : 0.25 - 0.15 * sit) + tw * (hash(k * 2.3) - 0.5) * 0.9;
-  u.head.rotation.x = -0.06 - 0.12 * sit + Math.sin(t * 0.5 + u.phase) * 0.03;
-  u.hair.rotation.z = Math.sin(t * 0.8 + u.phase) * 0.03 + (moving ? Math.sin(ph) * 0.05 : 0);
-  u.hair.rotation.x = Math.sin(t * 0.6 + u.phase) * 0.02;
-  u.tail.rotation.x = Math.sin(t * (moving ? 5 : 1.3) + u.phase) * 0.12;
-  // rare slow blink + glowing pupils that flicker
-  const blink = ((t + u.phase) % 6.5) < 0.18 ? 0.05 : 1;
-  for (const e of u.eyes) e.scale.y = blink;
-  const gl = 0.8 + 0.2 * Math.sin(t * 3 + u.phase) + (hash(Math.floor(t * 14) + u.phase * 7) < 0.04 ? -0.6 : 0);
-  u.glowMat.color.copy(u.glowBase).multiplyScalar(Math.max(0.2, gl));
+  const ph = t * 10 + u.phase, sw = moving ? Math.sin(ph) : 0, br = Math.sin(t * 1.6 + u.phase);
+  const k = Math.floor(t * 5 + u.phase * 3), tw = hash(k + u.phase) > 0.95 ? 1 : 0;   // rare glitchy twitch
+  P.rig.position.y = (moving ? Math.abs(Math.sin(ph)) * 0.07 : br * 0.012) * up + 0.19 * sit;
+  P.rig.position.x = tw * (hash(k * 5.1) - 0.5) * 0.05;
+  P.rig.rotation.z = (moving ? Math.sin(ph) * 0.08 : Math.sin(t * 0.4 + u.phase) * 0.02) * up;
+  P.rig.rotation.x = moving ? 0.1 * up : 0;
+  P.legL.rotation.x = sw * 0.8 * up - 1.45 * sit;
+  P.legR.rotation.x = -sw * 0.8 * up - 1.45 * sit;
+  const sway = Math.sin(t * 1.3 + u.phase) * 0.04;
+  P.armL.rotation.x = -sw * 0.9 * up - 0.55 * sit;
+  P.armR.rotation.x = sw * 0.9 * up - 0.55 * sit;
+  P.armL.rotation.z = -0.28 - sway; P.armR.rotation.z = 0.28 + sway;
+  // head: slow tilt, sometimes snaps sideways; looks up at the TV when seated
+  P.head.rotation.z = 0.08 + Math.sin(t * 0.7 + u.phase) * 0.06 + tw * (hash(k * 1.7) - 0.5) * 0.7;
+  P.head.rotation.y = Math.sin(t * 0.4 + u.phase) * (moving ? 0.1 : 0.3 - 0.2 * sit) + tw * (hash(k * 2.3) - 0.5) * 0.8;
+  P.head.rotation.x = -0.1 * sit + Math.sin(t * 0.5 + u.phase) * 0.03;
+  for (let i = 0; i < P.ears.length; i++) { const e = P.ears[i]; e.rotation.z = e.userData.base + Math.sin(t * 1.5 + u.phase + i * 1.7) * 0.05 + (moving ? Math.sin(ph) * 0.08 : 0); }
+  P.tail.rotation.z = Math.sin(t * (moving ? 8 : 1.5) + u.phase) * 0.25;
+  // slow blink; pupils wander; glow flickers
+  const blink = ((t + u.phase) % 5.5) < 0.16 ? 0.05 : 1;
+  for (const e of P.eyes) e.scale.y = blink;
+  for (let i = 0; i < P.pupils.length; i++) { const p = P.pupils[i]; p.position.x = Math.sin(t * 1.1 + u.phase + i * 2) * 0.03; }
+  const gl = 0.85 + 0.15 * Math.sin(t * 3 + u.phase) + (hash(Math.floor(t * 14) + u.phase * 7) < 0.04 ? -0.6 : 0);
+  P.glowMat.color.copy(P.glowBase).multiplyScalar(Math.max(0.25, gl));
   if (u.bubble) {
     const age = t - u.bubbleT;
     if (age > 8) disposeBubble(g); else if (age > 6.8) u.bubble.material.opacity = Math.max(0, (8 - age) / 1.2);
@@ -1155,7 +1163,7 @@ function disposeBubble(g) {
   g.remove(u.bubble); u.bubble.material.map.dispose(); u.bubble.material.dispose(); u.bubble = null;
 }
 function showBubble(g, text) {
-  const u = g.userData; if (!u.rig) return;
+  const u = g.userData; if (!u.P) return;
   disposeBubble(g);
   const FONT = '600 24px "Courier New", ui-monospace, monospace', MAXW = 420, LH = 30, PAD = 16, TAIL = 12;
   const mctx = mkCanvas(8, 8).getContext('2d'); mctx.font = FONT;
@@ -1176,24 +1184,28 @@ function showBubble(g, text) {
   lines.forEach((l, i) => x.fillText(l, PAD, PAD + i * LH));
   const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false;
   const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
-  spr.center.set(0.5, 0); spr.scale.set(W / 150, H / 150, 1); spr.position.set(0, 2.3, 0);
+  spr.center.set(0.5, 0); spr.scale.set(W / 150, H / 150, 1); spr.position.set(0, 2.2, 0);
   g.add(spr); u.bubble = spr; u.bubbleT = performance.now() / 1000;
 }
-function disposePlayer(g) { disposeBubble(g); g.userData.glowMat.dispose(); scene.remove(g); }
+function disposePlayer(g) { disposeBubble(g); g.userData.tones.black.glowMat.dispose(); g.userData.tones.white.glowMat.dispose(); scene.remove(g); }
 
-const me = makePlayer(0x8fd0ff, 0);
+const me = makePlayer();
 me.position.set(0, 0, 3);
 me.rotation.y = Math.PI; // face the TV
 
 const remotes = {}; // id -> { mesh, x, z, ry }
 const hueOf = (id) => Array.from(String(id)).reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
+// colours: everyone in the room sorted by id, alternating black / white (both browsers agree without the server)
+function refreshTones() {
+  const mine = socket.id || '~me', ids = [mine].concat(Object.keys(remotes)).sort();
+  setTone(me, ids.indexOf(mine) % 2 ? 'white' : 'black');
+  for (const id in remotes) setTone(remotes[id].mesh, ids.indexOf(id) % 2 ? 'white' : 'black');
+}
 function getRemote(id) {
-  if (!remotes[id]) {
-    const hue = hueOf(id);
-    remotes[id] = { mesh: makePlayer(new THREE.Color('hsl(' + hue + ', 75%, 58%)'), hue % 4), x: 0, z: 3, ry: 0 };
-  }
+  if (!remotes[id]) { remotes[id] = { mesh: makePlayer(), x: 0, z: 3, ry: 0 }; refreshTones(); }
   return remotes[id];
 }
+socket.on('connect', refreshTones);
 
 // ---------- camera ----------
 const camRay = new THREE.Raycaster();
@@ -1215,7 +1227,7 @@ function toggleCamera() {
 
 let lastH = [NaN, 0, 0, 0, 0, 0], camWantC = 0, camCollC = false; // the wall-collision ray is only re-cast when the view actually changed
 function updateCamera(dt) {
-  head.set(me.position.x, me.position.y + HEAD_Y - 0.2 * me.userData.sit, me.position.z);
+  head.set(me.position.x, me.position.y + HEAD_Y + 0.19 * me.userData.sit, me.position.z);
   const cp = Math.cos(pitch);
   dir.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp); // look direction
 
@@ -1334,14 +1346,16 @@ socket.on('move', (p) => {
   if (isNew) { r.mesh.position.set(p.x, 0, p.z); r.mesh.rotation.y = p.ry; } // appear where they are, don't slide in from the origin
 });
 socket.on('player-left', (id) => {
-  if (remotes[id]) { disposePlayer(remotes[id].mesh); delete remotes[id]; }
+  if (remotes[id]) { disposePlayer(remotes[id].mesh); delete remotes[id]; refreshTones(); }
 });
 
 // ---------- chat ----------
 const chatEl = $('chat'), chatLog = $('chatLog'), chatInput = $('chatInput'), chatForm = $('chatForm');
 let chatOpen = false, chatBC = null, lastChatSent = 0;
 const seenMsgs = new Set();
-const patientName = (id) => 'PATIENT ' + String(id || '????').slice(-4).toUpperCase();
+const toneOf = (id) => (remotes[id] ? remotes[id].mesh.userData.tone : 'white');
+const toneName = (id) => (toneOf(id) === 'white' ? 'PALE' : 'SHADE') + '-' + String(id || '??').slice(-2).toUpperCase();
+const toneCss = (id) => (toneOf(id) === 'white' ? '#f4f2ec' : '#9aa4b6');
 const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
 
 function addChatLine(name, text, color, cls) {
@@ -1371,14 +1385,14 @@ function receiveChat(m) {
   }
   if (m.id && m.id === socket.id) return;
   const text = cleanText(m.text); if (!text) return;
-  addChatLine(patientName(m.id), text, 'hsl(' + hueOf(m.id || 'x') + ', 60%, 68%)');
+  addChatLine(toneName(m.id), text, toneCss(m.id));
   if (remotes[m.id]) showBubble(remotes[m.id].mesh, text);
   blip();
 }
 function sendChat(text) {
   const mid = Math.random().toString(36).slice(2) + Date.now().toString(36);
   seenMsgs.add(mid);
-  addChatLine('YOU', text, '#cfe8ff');
+  addChatLine('YOU', text, me.userData.tone === 'white' ? '#f4f2ec' : '#9aa4b6');
   showBubble(me, text);
   socket.emit('chat', { text, mid });
   if (chatBC) { try { chatBC.postMessage({ id: socket.id, text, mid }); } catch (e) {} }
@@ -1663,22 +1677,22 @@ if (IS_TOUCH) {
 // ---------- sitting (other players see it automatically: a player standing on a seat spot is drawn seated) ----------
 let seatIdx = -1;
 const sitBtn = $('sitBtn'), prompt3El = $('prompt3');
-const seatOcc = (i) => { const c = CHAIRS[i]; for (const id in remotes) if (Math.hypot(remotes[id].mesh.position.x - c.x, remotes[id].mesh.position.z - (c.z + 0.03)) < 0.12) return true; return false; };
+const seatOcc = (i) => { const c = CHAIRS[i]; for (const id in remotes) if (Math.hypot(remotes[id].mesh.position.x - c.x, remotes[id].mesh.position.z - (c.z + SEAT_DZ)) < 0.12) return true; return false; };
 function nearestFreeChair() {
-  let best = -1, bd = 1.9;
+  let best = -1, bd = 2.3;
   CHAIRS.forEach((c, i) => { const d = Math.hypot(me.position.x - c.x, me.position.z - c.z); if (d < bd && !seatOcc(i)) { bd = d; best = i; } });
   return best;
 }
 function sitDown() {
   const i = nearestFreeChair(); if (i < 0) return;
-  seatIdx = i; me.position.set(CHAIRS[i].x, 0, CHAIRS[i].z + 0.03); me.rotation.y = Math.PI;
+  seatIdx = i; me.position.set(CHAIRS[i].x, 0, CHAIRS[i].z + SEAT_DZ); me.rotation.y = Math.PI;
   yaw = 0; pitch = -0.12; sendPos(true);
 }
-function standUp() { const c = CHAIRS[seatIdx]; seatIdx = -1; me.position.set(c.x, 0, c.z - 0.75); sendPos(true); }
+function standUp() { const c = CHAIRS[seatIdx]; seatIdx = -1; me.position.set(c.x, 0, c.z - 0.95); sendPos(true); }
 function toggleSit() { if (seatIdx >= 0) standUp(); else sitDown(); if (sitBtn) sitBtn.blur(); }
 function pushOutOfChairs() {
   for (const c of CHAIRS) {
-    const hx = 0.57, hz = 0.56, px = me.position.x - c.x, pz = me.position.z - c.z;
+    const hx = 0.675, hz = 0.66, px = me.position.x - c.x, pz = me.position.z - c.z;
     if (Math.abs(px) < hx && Math.abs(pz) < hz) {
       const ox = hx - Math.abs(px), oz = hz - Math.abs(pz);
       if (ox < oz) me.position.x += (px < 0 ? -1 : 1) * ox; else me.position.z += (pz < 0 ? -1 : 1) * oz;
@@ -1740,7 +1754,7 @@ function loop(now) {
     r.mesh.position.x += (r.x - r.mesh.position.x) * ra;
     r.mesh.position.z += (r.z - r.mesh.position.z) * ra;
     r.mesh.rotation.y += angDiff(r.mesh.rotation.y, r.ry) * ra;
-    const sr = CHAIRS.some((c) => Math.hypot(r.mesh.position.x - c.x, r.mesh.position.z - (c.z + 0.03)) < 0.1);
+    const sr = CHAIRS.some((c) => Math.hypot(r.mesh.position.x - c.x, r.mesh.position.z - (c.z + SEAT_DZ)) < 0.1);
     animateChar(r.mesh, rm && !sr, ts, sr);
   }
   animateChar(me, moving, ts, seatIdx >= 0);
