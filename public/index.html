@@ -22,6 +22,7 @@
   <input id="code" placeholder="Room code" maxlength="8" style="padding:6px;text-align:center">
   <button id="joinBtn">Join / Create room</button>
   <p style="opacity:.6">Same code in two windows = same room</p>
+  <p id="status" style="opacity:.9">Connecting to server...</p>
 </div>
 
 <div id="bar">
@@ -37,7 +38,19 @@
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
+const statusEl = document.getElementById('status');
+if (typeof THREE === 'undefined') {
+  statusEl.textContent = 'Three.js failed to load (blocked or offline?)';
+  throw new Error('THREE missing');
+}
+if (typeof io === 'undefined') {
+  statusEl.textContent = 'Socket.IO not found. Open this page from the running Node server, not as a file or GitHub Pages.';
+  throw new Error('io missing');
+}
 const socket = io();
+socket.on('connect', () => (statusEl.textContent = 'Connected to server'));
+socket.on('connect_error', () => (statusEl.textContent = 'Cannot reach server...'));
+socket.on('disconnect', () => (statusEl.textContent = 'Disconnected from server'));
 
 // ---------- 3D scene ----------
 const scene = new THREE.Scene();
@@ -146,7 +159,8 @@ function applyVideo(v) {
       playerVars: { playsinline: 1, start: Math.floor(v.time || 0) },
       events: {
         onReady: (e) => { playerReady = true; v.playing ? e.target.playVideo() : e.target.pauseVideo(); if (pending) applyVideo(pending); },
-        onStateChange: onPlayerState
+        onStateChange: onPlayerState,
+        onError: (e) => alert('YouTube could not play this video (error ' + e.data + '). Some videos block embedding, try another.')
       }
     });
     return;
