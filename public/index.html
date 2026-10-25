@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ROOMMATE (alpha)</title>
+<style>
+  body { margin: 0; overflow: hidden; font-family: sans-serif; background: #111; color: #eee; }
+  canvas { display: block; }
+  #join { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 10px; background: #111; z-index: 10; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; display: none; gap: 8px; align-items: center;
+         padding: 8px; background: rgba(0,0,0,.65); z-index: 5; }
+  #bar input { flex: 1; padding: 4px; }
+  #tv { position: fixed; display: none; z-index: 2; background: #000; }
+  #tv iframe { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+
+<div id="join">
+  <h1>ROOMMATE <small>alpha</small></h1>
+  <input id="code" placeholder="Room code" maxlength="8" style="padding:6px;text-align:center">
+  <button id="joinBtn">Join / Create room</button>
+  <p style="opacity:.6">Same code in two windows = same room</p>
+</div>
+
+<div id="bar">
+  <b>Room: <span id="roomLabel"></span></b>
+  <input id="url" placeholder="Paste a YouTube link">
+  <button id="loadBtn">Play on TV</button>
+  <span style="opacity:.6">WASD to move</span>
+</div>
+
+<div id="tv"><div id="yt"></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+const socket = io();
+
+// ---------- 3D scene ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a24);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 7, 11);
+camera.lookAt(0, 2, 0);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+sun.position.set(5, 10, 5);
+scene.add(sun);
+
+function box(w, h, d, color, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
+  m.position.set(x, y, z);
+  scene.add(m);
+  return m;
+}
+
+// floor + 3 walls (front is open so the camera can see in)
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshLambertMaterial({ color: 0x8b6b4a }));
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+box(12, 5, 0.3, 0xb8c4d6, 0, 2.5, -6);   // back
+box(0.3, 5, 12, 0x9fb0c8, -6, 2.5, 0);   // left
+box(0.3, 5, 12, 0x9fb0c8, 6, 2.5, 0);    // right
+
+// TV on a table against the back wall
+box(5, 1, 1, 0x5a3e2b, 0, 0.5, -5.3);          // table
+box(4.4, 2.6, 0.3, 0x111111, 0, 2.4, -5.7);    // TV body
+const screen = new THREE.Mesh(new THREE.PlaneGeometry(4, 2.2), new THREE.MeshBasicMaterial({ color: 0x222233 }));
+screen.position.set(0, 2.4, -5.54);
+scene.add(screen);
+
+// ---------- players ----------
+function makePlayer(color) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1, 0.5), mat);
+  body.position.y = 0.7;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 16), mat);
+  head.position.y = 1.55;
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.2), new THREE.MeshLambertMaterial({ color: 0xffffff }));
+  nose.position.set(0, 1.55, 0.35); // shows which way it faces
+  g.add(body, head, nose);
+  scene.add(g);
+  return g;
+}
+
+const me = makePlayer(0x3aa0ff);
+me.position.set(0, 0, 3);
+
+const remotes = {}; // id -> { mesh, x, z, ry }
+function getRemote(id) {
+  if (!remotes[id]) {
+    const hue = [...id].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
+    const mesh = makePlayer(new THREE.Color(`hsl(${hue}, 70%, 55%)`));
+    remotes[id] = { mesh, x: 0, z: 3, ry: 0 };
+  }
+  return remotes[id];
+}
+
+// ---------- movement ----------
+const keys = {};
+addEventListener('keydown', (e) => { if (e.target.tagName !== 'INPUT') keys[e.key.toLowerCase()] = true; });
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+let joined = false, lastSent = 0, lastSentPos = '';
+function sendPos(force) {
+  if (!joined) return;
+  const s = `${me.position.x.toFixed(2)},${me.position.z.toFixed(2)},${me.rotation.y.toFixed(2)}`;
+  if (!force && s === lastSentPos) return;
+  lastSentPos = s;
+  socket.emit('move', { x: me.position.x, z: me.position.z, ry: me.rotation.y });
+}
+
+// ---------- networking: players ----------
+socket.on('player-joined', () => sendPos(true)); // tell the newcomer where I am
+socket.on('move', (p) => { const r = getRemote(p.id); r.x = p.x; r.z = p.z; r.ry = p.ry; });
+socket.on('player-left', (id) => {
+  if (remotes[id]) { scene.remove(remotes[id].mesh); delete remotes[id]; }
+});
+
+// ---------- YouTube on the TV ----------
+const tv = document.getElementById('tv');
+let ytReady = false, player = null, playerReady = false, pending = null, suppress = false, currentVid = null;
+
+function onYouTubeIframeAPIReady() { ytReady = true; if (pending) applyVideo(pending); }
+
+function quiet() { suppress = true; setTimeout(() => (suppress = false), 800); }
+
+function applyVideo(v) {
+  if (!ytReady || (player && !playerReady)) { pending = v; return; }
+  pending = null;
+  tv.style.display = 'block';
+  quiet();
+
+  if (!player) {
+    currentVid = v.id;
+    player = new YT.Player('yt', {
+      width: '100%', height: '100%', videoId: v.id,
+      playerVars: { playsinline: 1, start: Math.floor(v.time || 0) },
+      events: {
+        onReady: (e) => { playerReady = true; v.playing ? e.target.playVideo() : e.target.pauseVideo(); if (pending) applyVideo(pending); },
+        onStateChange: onPlayerState
+      }
+    });
+    return;
+  }
+  if (currentVid !== v.id) {
+    currentVid = v.id;
+    player.loadVideoById(v.id, v.time || 0);
+    return;
+  }
+  if (Math.abs(player.getCurrentTime() - v.time) > 1.5) player.seekTo(v.time, true);
+  v.playing ? player.playVideo() : player.pauseVideo();
+}
+
+// the player's own controls (click play/pause on the TV) are what get synced
+function onPlayerState(e) {
+  if (suppress) return;
+  if (e.data === 1) socket.emit('video-state', { playing: true, time: player.getCurrentTime() });
+  else if (e.data === 2) socket.emit('video-state', { playing: false, time: player.getCurrentTime() });
+}
+
+socket.on('video', applyVideo);
+
+function youtubeId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+document.getElementById('loadBtn').onclick = () => {
+  const id = youtubeId(document.getElementById('url').value.trim());
+  if (!id) return alert('Could not read that YouTube link');
+  socket.emit('video-load', id);
+};
+
+// keep the video box exactly over the 3D TV screen
+function placeTV() {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  [[-2, 3.5], [2, 3.5], [-2, 1.3], [2, 1.3]].forEach(([x, y]) => {
+    const v = new THREE.Vector3(x, y, -5.54).project(camera);
+    const px = (v.x + 1) / 2 * innerWidth, py = (1 - v.y) / 2 * innerHeight;
+    x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+  });
+  tv.style.left = x0 + 'px'; tv.style.top = y0 + 'px';
+  tv.style.width = (x1 - x0) + 'px'; tv.style.height = (y1 - y0) + 'px';
+}
+
+// ---------- join UI ----------
+const codeInput = document.getElementById('code');
+codeInput.value = Math.random().toString(36).slice(2, 6).toUpperCase();
+document.getElementById('joinBtn').onclick = () => {
+  const code = codeInput.value.trim().toUpperCase();
+  if (!code) return;
+  socket.emit('join', code);
+  joined = true;
+  document.getElementById('roomLabel').textContent = code;
+  document.getElementById('join').style.display = 'none';
+  document.getElementById('bar').style.display = 'flex';
+  sendPos(true);
+};
+
+// ---------- main loop ----------
+let prev = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - prev) / 1000, 0.1);
+  prev = now;
+
+  let dx = 0, dz = 0;
+  if (keys['w']) dz -= 1;
+  if (keys['s']) dz += 1;
+  if (keys['a']) dx -= 1;
+  if (keys['d']) dx += 1;
+  if (dx || dz) {
+    const len = Math.hypot(dx, dz);
+    me.position.x = Math.max(-5.3, Math.min(5.3, me.position.x + (dx / len) * 4 * dt));
+    me.position.z = Math.max(-4.4, Math.min(5.3, me.position.z + (dz / len) * 4 * dt));
+    me.rotation.y = Math.atan2(dx, dz);
+  }
+  if (now - lastSent > 50) { lastSent = now; sendPos(false); }
+
+  for (const id in remotes) {
+    const r = remotes[id];
+    r.mesh.position.x += (r.x - r.mesh.position.x) * 0.3;
+    r.mesh.position.z += (r.z - r.mesh.position.z) * 0.3;
+    r.mesh.rotation.y = r.ry;
+  }
+
+  renderer.render(scene, camera);
+  placeTV();
+}
+requestAnimationFrame(loop);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
