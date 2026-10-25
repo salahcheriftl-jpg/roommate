@@ -1,33 +1,132 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <title>ROOMMATE (alpha)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#05070a">
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; font-family: sans-serif; background: #05070a; color: #eee; }
+  :root { --ink:#c4cdd2; --dim:#76838a; --line:#283036; --blood:#c3362c; --panel:#0a0d10; }
+  * { -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05070a; color: #eee;
+               font-family: "Courier New", ui-monospace, Menlo, Consolas, monospace; touch-action: none;
+               -webkit-user-select: none; user-select: none; -webkit-text-size-adjust: 100%; }
+  input { -webkit-user-select: text; user-select: text; }
+  button { font-family: inherit; }
   /* the canvas is transparent and lets clicks pass through, so the YouTube player under it stays usable */
   canvas { position: fixed; left: 0; top: 0; z-index: 2; pointer-events: none; }
-  #join { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
-          justify-content: center; gap: 10px; background: #06080a; color: #9fb0c0; font-family: monospace; z-index: 10; }
-  #join h1 { letter-spacing: 6px; font-weight: 400; }
-  #join input, #join button { background: #0d1216; color: #b8c8d8; border: 1px solid #2a343c; font-family: monospace; }
-  #join button { padding: 6px 12px; cursor: pointer; }
-  #vig { position: fixed; inset: 0; z-index: 3; pointer-events: none;
-         background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%); }
-  .bar { position: fixed; left: 0; right: 0; display: none; gap: 8px; align-items: center;
-         padding: 6px 8px; background: rgba(0,0,0,.65); z-index: 5; font-size: 14px; }
-  #bar { top: 0; }
-  #player { top: 38px; }
-  #seek { flex: 1; min-width: 100px; }
-  #url { width: 220px; padding: 4px; }
-  .chip { padding: 2px 8px; border-radius: 10px; background: rgba(255,255,255,.15); }
+
+  /* ---------- join screen ---------- */
+  #join { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 12px; background: radial-gradient(ellipse at center, #0c1114, #040506 70%); color: #9fb0c0; z-index: 10; padding: 20px; text-align: center; }
+  #join h1 { letter-spacing: 8px; font-weight: 400; margin: 0 0 6px; color: #c9d3d8; animation: flick 6s infinite; }
+  #join h1 small { color: var(--blood); letter-spacing: 3px; font-size: 12px; }
+  #join input, #join button { background: #0d1216; color: #b8c8d8; border: 1px solid var(--line); font-family: inherit; border-radius: 3px; }
+  #join input { padding: 9px; text-align: center; font-size: 16px; letter-spacing: 4px; }
+  #join button { padding: 9px 18px; cursor: pointer; letter-spacing: 2px; }
+  #join button:hover { border-color: #6a2a26; color: #fff; }
+  @keyframes flick { 0%,94%,100% { opacity: 1 } 95% { opacity: .35 } 96% { opacity: 1 } 97% { opacity: .5 } }
+
+  /* ---------- overlays ---------- */
+  #vig { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 3; pointer-events: none;
+         background: radial-gradient(ellipse at center, rgba(0,0,0,0) 50%, rgba(0,0,0,.6) 100%),
+                     repeating-linear-gradient(to bottom, rgba(0,0,0,.05) 0, rgba(0,0,0,.05) 1px, transparent 1px, transparent 3px); }
   #cross { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%;
            background: rgba(255,255,255,.8); z-index: 4; display: none; pointer-events: none; }
-  #prompt { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); padding: 4px 10px;
-            background: rgba(0,0,0,.6); border-radius: 4px; display: none; z-index: 4; pointer-events: none; }
-  #prompt2 { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); padding: 4px 10px;
-             background: rgba(0,0,0,.6); border-radius: 4px; display: none; z-index: 4; pointer-events: none; }
-  #tv { position: fixed; left: 0; top: 0; width: 812px; height: 452px; transform-origin: 0 0;
+  .prompt { position: fixed; left: 50%; transform: translateX(-50%); padding: 4px 12px; font-size: 13px; letter-spacing: 1px;
+            background: rgba(0,0,0,.65); border: 1px solid var(--line); border-radius: 3px; display: none; z-index: 4; pointer-events: none; }
+  #prompt { bottom: 60px; } #prompt2 { bottom: 96px; }
+  #help { position: fixed; left: 50%; top: 56px; transform: translateX(-50%); z-index: 4; pointer-events: none; font-size: 12px; color: var(--dim);
+          letter-spacing: 1px; opacity: 0; transition: opacity 1.2s; text-align: center; width: 90%; }
+  #help.show { opacity: 1; }
+
+  /* ---------- top HUD ---------- */
+  .bar { position: fixed; left: 0; right: 0; top: 0; display: none; gap: 8px; align-items: center; flex-wrap: wrap;
+         padding: 8px 10px; z-index: 5; font-size: 13px; background: linear-gradient(rgba(0,0,0,.75), rgba(0,0,0,0)); pointer-events: none; }
+  .bar > * { pointer-events: auto; }
+  .bar .grow { flex: 1; pointer-events: none; }
+  .chip, .btn { padding: 5px 10px; border-radius: 3px; border: 1px solid var(--line); background: rgba(8,11,13,.8); color: var(--ink); font-size: 12px; letter-spacing: 1px; }
+  .chip b { color: #e6ecef; font-weight: 700; }
+  .btn { cursor: pointer; } .btn:hover { border-color: #6a2a26; color: #fff; }
+
+  /* ---------- TV control deck ---------- */
+  .deck { position: fixed; left: 50%; bottom: 14px; width: min(780px, calc(100% - 20px)); box-sizing: border-box;
+          transform: translate(-50%, 18px); display: flex; flex-direction: column; gap: 9px; padding: 10px 14px 13px; z-index: 6;
+          background: linear-gradient(rgba(14,18,21,.97), rgba(7,9,11,.97)); border: 1px solid #2b343a; border-radius: 6px;
+          box-shadow: 0 12px 40px rgba(0,0,0,.75), inset 0 1px 0 rgba(255,255,255,.04), 0 0 28px rgba(130,24,18,.14);
+          visibility: hidden; opacity: 0; transition: opacity .18s, transform .18s, visibility .18s; color: var(--ink); }
+  .deck.show { visibility: visible; opacity: 1; transform: translate(-50%, 0); }
+  .deck-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .rec { width: 9px; height: 9px; border-radius: 50%; background: #3a1512; flex: none; }
+  .deck.playing .rec { background: #e8291d; box-shadow: 0 0 8px #e8291d; animation: blink 1.4s infinite; }
+  @keyframes blink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: .25 } }
+  .state { font-size: 12px; letter-spacing: 3px; color: #d4dce0; min-width: 78px; }
+  .deck-title { flex: 1; min-width: 0; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seekwrap { display: flex; align-items: center; gap: 10px; }
+  .t { font-size: 12px; color: #8d9aa1; min-width: 42px; font-variant-numeric: tabular-nums; }
+  .t.r { text-align: right; }
+  .deck-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .transport { display: flex; align-items: center; gap: 8px; }
+  .deck button { cursor: pointer; color: #aab7be; background: transparent; border: 1px solid #28323a; border-radius: 4px; transition: background .12s, color .12s, border-color .12s; }
+  .deck button:hover { background: #151c21; color: #fff; border-color: #3d4a52; }
+  .deck button:active { transform: translateY(1px); }
+  .deck svg { width: 20px; height: 20px; fill: currentColor; display: block; }
+  .ibtn { width: 38px; height: 34px; display: flex; align-items: center; justify-content: center; gap: 1px; padding: 0; position: relative; }
+  .ibtn small { position: absolute; bottom: 1px; right: 4px; font-size: 9px; letter-spacing: 0; }
+  .ibtn.fwd svg { transform: scaleX(-1); } .ibtn.fwd small { right: auto; left: 4px; }
+  .play { width: 48px; height: 48px; border-radius: 50% !important; display: flex; align-items: center; justify-content: center; padding: 0;
+          color: #ff6a5e !important; background: #1b0f0e !important; border-color: #5c2420 !important; }
+  .play:hover { box-shadow: 0 0 14px rgba(232,41,29,.4); background: #271312 !important; }
+  .play svg { width: 22px; height: 22px; }
+  .play .i-pause { display: none; } .play.on .i-pause { display: block; } .play.on .i-play { display: none; }
+  .vol { display: flex; align-items: center; gap: 6px; }
+  #vol { width: 92px; flex: none; }
+  .vol .i-x { display: none; } .vol .muted .i-x { display: block; } .vol .muted .i-w { display: none; }
+  .load { flex: 1; min-width: 190px; display: flex; gap: 6px; }
+  .load input { flex: 1; min-width: 0; padding: 8px 9px; font-size: 13px; background: #05070a; color: #cfd8dc; border: 1px solid #28323a; border-radius: 4px; font-family: inherit; }
+  .load input:focus { outline: none; border-color: #6a2a26; }
+  .load button { padding: 0 14px; font-size: 12px; letter-spacing: 2px; }
+  .deck.idle .transport, .deck.idle .seekwrap { opacity: .35; pointer-events: none; }
+  .rng { -webkit-appearance: none; appearance: none; flex: 1; height: 20px; margin: 0; background: transparent; cursor: pointer; --p: 0%; --b: 0%; }
+  .rng:focus { outline: none; }
+  .rng::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+     background: linear-gradient(to right, #c3362c 0, #c3362c var(--p), #4a565e var(--p), #4a565e var(--b), #1a2125 var(--b)); }
+  .rng::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%; background: #e8ecee; border: 2px solid #c3362c; box-shadow: 0 0 6px rgba(195,54,44,.7); }
+  .rng::-moz-range-track { height: 4px; border-radius: 2px;
+     background: linear-gradient(to right, #c3362c 0, #c3362c var(--p), #4a565e var(--p), #4a565e var(--b), #1a2125 var(--b)); }
+  .rng::-moz-range-thumb { width: 8px; height: 8px; border-radius: 50%; background: #e8ecee; border: 2px solid #c3362c; }
+
+  /* ---------- chat ---------- */
+  #chat { position: fixed; left: 12px; bottom: 14px; width: min(380px, calc(100% - 24px)); z-index: 7; display: none; flex-direction: column;
+          gap: 6px; font-size: 13px; pointer-events: none; transition: bottom .2s; }
+  body.deck-open #chat { bottom: 168px; }
+  #chatLog { display: flex; flex-direction: column; justify-content: flex-end; max-height: 170px; overflow: hidden;
+             -webkit-mask-image: linear-gradient(transparent, #000 35%); mask-image: linear-gradient(transparent, #000 35%); }
+  .line { padding: 3px 8px; margin-top: 2px; color: #d3dade; background: rgba(0,0,0,.5); border-left: 2px solid #3a444a;
+          text-shadow: 0 1px 2px #000; word-break: break-word; animation: fadeLine 18s forwards; }
+  .line b { font-weight: 700; }
+  .line.sys { color: var(--dim); font-style: italic; border-left-color: #6a2a26; }
+  @keyframes fadeLine { 0%, 78% { opacity: 1 } 100% { opacity: 0 } }
+  #chat.open #chatLog { max-height: 42vh; overflow-y: auto; pointer-events: auto; background: rgba(4,6,8,.7); -webkit-mask-image: none; mask-image: none; border: 1px solid var(--line); }
+  #chat.open .line { animation: none; opacity: 1; }
+  #chatForm { display: none; gap: 6px; pointer-events: auto; margin: 0; }
+  #chat.open #chatForm { display: flex; }
+  #chatInput { flex: 1; min-width: 0; padding: 8px 9px; font-size: 14px; background: rgba(5,7,10,.95); color: #dbe3e7; border: 1px solid #3a2624; border-radius: 3px; font-family: inherit; }
+  #chatInput:focus { outline: none; border-color: #7a2d28; }
+  #chatForm button { padding: 0 12px; font-size: 12px; letter-spacing: 2px; background: #1b0f0e; color: #ff7468; border: 1px solid #5c2420; border-radius: 3px; cursor: pointer; }
+
+  /* ---------- touch controls ---------- */
+  #joy { position: fixed; left: 22px; bottom: 26px; width: 124px; height: 124px; border-radius: 50%; z-index: 6; display: none;
+         background: rgba(10,14,17,.45); border: 1px solid #36424a; touch-action: none; }
+  #knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%;
+          background: rgba(190,60,50,.55); border: 1px solid #7a2d28; pointer-events: none; }
+  body.touch.in-room #joy { display: block; }
+  body.deck-open #joy { display: none !important; }
+  body.touch #chat { bottom: 164px; }
+  body.touch.deck-open #chat { bottom: 176px; }
+  body.touch input[type=text] { font-size: 16px; }
+
+  #tv { position: fixed; left: 0; top: 0; width: 812px; height: 452px; transform-origin: 0 0; will-change: transform;
         z-index: 1; background: #000; display: none; }
   #tv iframe { width: 100%; height: 100%; border: 0; }
 </style>
@@ -36,35 +135,64 @@
 
 <div id="join">
   <h1>ROOMMATE <small>alpha</small></h1>
-  <input id="code" placeholder="Room code" maxlength="8" style="padding:6px;text-align:center">
-  <button id="joinBtn">Join / Create room</button>
-  <p style="opacity:.6">Same code in two windows = same room</p>
-  <p id="status" style="opacity:.9">Connecting to server...</p>
+  <input id="code" placeholder="ROOM CODE" maxlength="8" autocomplete="off" autocapitalize="characters">
+  <button id="joinBtn">ENTER THE ROOM</button>
+  <p style="opacity:.55;margin:4px 0;font-size:13px">Same code in two windows = same room</p>
+  <p id="status" style="opacity:.9;margin:0;font-size:13px">Connecting to server...</p>
 </div>
 
 <div id="bar" class="bar">
-  <b>Room: <span id="roomLabel"></span></b>
-  <span id="camMode" class="chip"></span>
-  <span style="opacity:.6">Click room to look - WASD move - V camera - E TV - F light</span>
-  <button id="lightBtn" style="margin-left:auto">Light: ON (F)</button>
-  <button id="tvBtn">TV controls (E)</button>
+  <span class="chip">ROOM <b id="roomLabel"></b></span>
+  <button id="camMode" class="chip btn" title="Toggle camera (V)"></button>
+  <span class="grow"></span>
+  <button id="lightBtn" class="btn">Light: ON (F)</button>
+  <button id="tvBtn" class="btn">TV (E)</button>
+  <button id="chatBtn" class="btn">Chat (T)</button>
+</div>
+<div id="help"></div>
+
+<div id="deck" class="deck idle" role="group" aria-label="TV controls">
+  <div class="deck-top">
+    <span class="rec"></span>
+    <span id="deckState" class="state">NO TAPE</span>
+    <span id="deckTitle" class="deck-title">Paste a YouTube link below to load a tape</span>
+    <button id="closeBtn" class="ibtn" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6.4 4.9 12 10.6l5.6-5.7 1.5 1.5-5.7 5.6 5.7 5.6-1.5 1.5-5.6-5.7-5.6 5.7-1.5-1.5 5.7-5.6-5.7-5.6z"/></svg></button>
+  </div>
+  <div class="seekwrap">
+    <span id="curLbl" class="t">0:00</span>
+    <input type="range" id="seek" class="rng" min="0" max="1" step="0.1" value="0" aria-label="Seek">
+    <span id="durLbl" class="t r">0:00</span>
+  </div>
+  <div class="deck-row">
+    <div class="transport">
+      <button id="backBtn" class="ibtn" title="Back 10s (Left = 5s)" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24"><path d="M12 5V1L6.5 6 12 11V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg><small>10</small></button>
+      <button id="playBtn" class="play" title="Play / pause (Space)" aria-label="Play or pause"><svg class="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg><svg class="i-pause" viewBox="0 0 24 24"><path d="M6 4h4.5v16H6zM13.5 4H18v16h-4.5z"/></svg></button>
+      <button id="fwdBtn" class="ibtn fwd" title="Forward 10s (Right = 5s)" aria-label="Forward 10 seconds"><svg viewBox="0 0 24 24"><path d="M12 5V1L6.5 6 12 11V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg><small>10</small></button>
+    </div>
+    <div class="vol">
+      <button id="muteBtn" class="ibtn" title="Mute (M)" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9z"/><path class="i-w" d="M15.5 8.5a5 5 0 0 1 0 7l-1.4-1.4a3 3 0 0 0 0-4.2zM18.3 5.7a9 9 0 0 1 0 12.6l-1.4-1.4a7 7 0 0 0 0-9.8z"/><path class="i-x" d="m15 9.4 1.4-1.4 2.1 2.1 2.1-2.1L22 9.4l-2.1 2.1L22 13.6l-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1z"/></svg></button>
+      <input type="range" id="vol" class="rng" min="0" max="100" step="1" value="80" aria-label="Volume">
+    </div>
+    <div class="load">
+      <input type="text" id="url" placeholder="Paste a YouTube link" autocomplete="off">
+      <button id="loadBtn">LOAD</button>
+    </div>
+  </div>
 </div>
 
-<div id="player" class="bar">
-  <button id="playBtn">&#9654;</button>
-  <button id="backBtn">-10s</button>
-  <button id="fwdBtn">+10s</button>
-  <input type="range" id="seek" min="0" max="1" step="0.1" value="0">
-  <span id="timeLbl">0:00 / 0:00</span>
-  <input type="text" id="url" placeholder="Paste a YouTube link">
-  <button id="loadBtn">Load</button>
-  <button id="closeBtn">&#10005;</button>
+<div id="chat">
+  <div id="chatLog" aria-live="polite"></div>
+  <form id="chatForm" autocomplete="off">
+    <input id="chatInput" type="text" maxlength="140" placeholder="Say something..." autocomplete="off">
+    <button type="submit">SEND</button>
+  </form>
 </div>
 
+<div id="joy"><div id="knob"></div></div>
 <div id="vig"></div>
 <div id="cross"></div>
-<div id="prompt">E: TV controls</div>
-<div id="prompt2">F: light switch (or click it)</div>
+<div id="prompt" class="prompt">E: TV controls</div>
+<div id="prompt2" class="prompt">F: light switch (or click it)</div>
 <div id="tv"><div id="yt"></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -97,15 +225,37 @@ const TP_DIST = 4.5, HEAD_Y = 1.55, SENS = 0.0022;
 const scene = new THREE.Scene(); // no background: the canvas is transparent (page colour shows through)
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.05, 100);
 camera.rotation.order = 'YXZ';
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+const promptEl = $('prompt'), prompt2El = $('prompt2');
+function setShown(el, show) { const v = show ? 'block' : 'none'; if (el._d !== v) { el._d = v; el.style.display = v; } } // avoid redundant style writes
+const _pt = { x: 0, y: 0, z: 0, rx: 0, ry: 0, dirty: true }; // last camera pose used to place the TV overlay
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: !IS_TOUCH, alpha: true, powerPreference: 'high-performance' });
+} catch (err) {
+  statusEl.textContent = 'WebGL is not available in this browser (try enabling hardware acceleration).';
+  throw err;
+}
 renderer.setClearColor(0x000000, 0);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
+renderer.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
 
 // =====================================================================
 // ENVIRONMENT: padded psychiatric room (replaces the old basic room)
 // =====================================================================
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+// adaptive quality: starts sharp, steps the resolution (and finally the bump maps) down if frames run slow
+const padMats = [];
+const DPR_MAX = Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.25 : 1.5);
+const QUALITY_DPR = [DPR_MAX, Math.min(DPR_MAX, 1), 0.8];
+let quality = 0;
+renderer.setPixelRatio(QUALITY_DPR[0]);
+function setQuality(q) {
+  quality = q;
+  renderer.setPixelRatio(QUALITY_DPR[q]);
+  renderer.setSize(innerWidth, innerHeight);
+  if (q >= 2) padMats.forEach((m) => { m.bumpMap = null; m.needsUpdate = true; });
+}
 scene.fog = new THREE.FogExp2(0x1a222a, 0.028); // faint cold haze, deepens the far corners
 
 // ---------- small procedural-texture toolkit ----------
@@ -120,7 +270,7 @@ function rng(seed) { // seeded random so the room looks the same every time
 function mkCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
 function canvasTex(c, repeat) {
   const t = new THREE.CanvasTexture(c);
-  t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
   if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); }
   return t;
 }
@@ -303,7 +453,7 @@ colliders.push(ceiling);
   geo.computeVertexNormals();
 
   const R = rng(5), COLS = 12, PX = 11.7 / COLS, ROWS = 5, F = 5.85, OFF = 0.006;
-  const VARIANTS = 3, mats = [], lists = [];
+  const VARIANTS = 3, mats = padMats, lists = [];
   for (let v = 0; v < VARIANTS; v++) {
     const t = padTextures(100 + v * 31);
     mats.push(new THREE.MeshStandardMaterial({ color: 0xffffff, map: t.map, bumpMap: t.bump, bumpScale: 2.6, roughness: 0.93, metalness: 0 }));
@@ -478,6 +628,7 @@ scene.add(dust);
 // =====================================================================
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true; // all shadow casters are static
 
 function decal(w, h, x, y, z, ry, draw) {
   const c = mkCanvas(256, Math.round(256 * h / w)), g = c.getContext('2d');
@@ -513,7 +664,7 @@ const moon = new THREE.SpotLight(0x86a6e0, 1.7, 24, 0.42, 0.25, 1);
   }
   // the moon: a spot outside the wall, shining in through the bars (they cast real shadows)
   moon.position.set(-7.6, 3.55, winZ); moon.target.position.set(0.8, 0, winZ + 1.2);
-  moon.castShadow = true; moon.shadow.mapSize.set(2048, 2048);
+  moon.castShadow = true; moon.shadow.mapSize.set(1024, 1024);
   moon.shadow.camera.near = 1; moon.shadow.camera.far = 24; moon.shadow.bias = -0.0004;
   scene.add(moon, moon.target);
 })();
@@ -763,7 +914,7 @@ function animateEnvironment(t) {
   dustGeo.attributes.position.needsUpdate = true;
 
   // "F: light switch" hint when you're near it
-  $('prompt2').style.display = (joined && !controlsOpen && Math.hypot(me.position.x - 5.6, me.position.z - SW_Z) < 2.4) ? 'block' : 'none';
+  setShown(prompt2El, joined && !controlsOpen && !chatOpen && Math.hypot(me.position.x - 5.6, me.position.z - SW_Z) < 2.4);
 
   updateTvStatic(t, faulting);
 }
@@ -780,7 +931,7 @@ tvNoiseTex.magFilter = THREE.NearestFilter; tvNoiseTex.minFilter = THREE.Nearest
 const offMat = new THREE.MeshBasicMaterial({ map: tvNoiseTex });
 let tvStaticAt = 0;
 function updateTvStatic(t, boost) { // faint static on the dead TV (only while no video is loaded)
-  if (screen.material !== offMat || t - tvStaticAt < 0.085) return;
+  if (screen.material !== offMat || t - tvStaticAt < 0.11) return;
   tvStaticAt = t;
   const d = tvNoiseImg.data, amp = boost ? 130 : 44;
   for (let i = 0; i < d.length; i += 4) { const v = Math.pow(Math.random(), 3) * amp + 4; d[i] = v * 0.9; d[i + 1] = v; d[i + 2] = v * 1.12; d[i + 3] = 255; }
@@ -793,90 +944,196 @@ screen.renderOrder = -1;
 scene.add(screen);
 const tvPick = [tvBody, screen];
 
-// ---------- players ----------
+// ---------- players: gaunt, hollow-eyed patients ----------
+function shadowTexture() {
+  const c = mkCanvas(64, 64), g = c.getContext('2d');
+  blob(g, 32, 32, 32, 'rgba(0,0,0,0.7)', 'rgba(0,0,0,0)');
+  return new THREE.CanvasTexture(c);
+}
+const PG = { // geometry and materials are shared by every player (cheap to draw)
+  sph: new THREE.SphereGeometry(1, 14, 10),
+  cyl: new THREE.CylinderGeometry(1, 1, 1, 8),
+  box: new THREE.BoxGeometry(1, 1, 1),
+  cone: new THREE.ConeGeometry(1, 1, 8),
+  ring: new THREE.TorusGeometry(1, 0.1, 6, 18),
+  shadow: new THREE.CircleGeometry(0.55, 20),
+  gown: (function () { // hospital gown with a ragged hem
+    const g = new THREE.CylinderGeometry(0.24, 0.38, 1.0, 14, 3, true), p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      if (y < -0.45) { const a = Math.atan2(z, x); p.setY(i, y - 0.11 * Math.abs(Math.sin(a * 3.5 + 0.6)) - 0.03 * hash(Math.round(a * 10))); }
+    }
+    g.computeVertexNormals();
+    return g;
+  })()
+};
+const PM = {
+  skin: new THREE.MeshStandardMaterial({ color: 0xaeb3a8, roughness: 0.9, emissive: 0x0b0d0a }),
+  gown: new THREE.MeshStandardMaterial({ color: 0x80898d, roughness: 1, emissive: 0x0a0c0d, side: THREE.DoubleSide }),
+  stain: new THREE.MeshStandardMaterial({ color: 0x3b1d18, roughness: 1 }),
+  dark: new THREE.MeshBasicMaterial({ color: 0x020203 }),
+  thread: new THREE.MeshBasicMaterial({ color: 0x0d0d0e }),
+  band: new THREE.MeshStandardMaterial({ color: 0xaaa490, roughness: 1, emissive: 0x15140f }),
+  sack: new THREE.MeshStandardMaterial({ color: 0x7e6b4d, roughness: 1, emissive: 0x120d08 }),
+  shadow: new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false })
+};
+
+// variant 0 = hollow (black sockets, stitched grin) | 1 = sack head | 2 = bandaged
 function makePlayer(color, variant = 0) {
-  // cute chibi critter: round bean body, big head, glossy eyes, blush, ears, tiny tail
   const g = new THREE.Group(), rig = new THREE.Group();
-  const base = new THREE.Color(color);
-  const std = (c, em, rough) => new THREE.MeshStandardMaterial({ color: c, roughness: rough == null ? 0.75 : rough, emissive: new THREE.Color(c).multiplyScalar(em == null ? 0.16 : em) });
-  const mBody = std(base), mLight = std(base.clone().lerp(new THREE.Color(0xffffff), 0.65), 0.2);
-  const mPink = std(0xff9bb0, 0.35), mEye = new THREE.MeshStandardMaterial({ color: 0x14161e, roughness: 0.2 });
-  const mWhite = new THREE.MeshBasicMaterial({ color: 0xffffff }), mDark = new THREE.MeshBasicMaterial({ color: 0x3b2b2e });
-  const S = new THREE.SphereGeometry(1, 20, 14);
-  const ball = (mat, x, y, z, sx, sy, sz, parent) => {
-    const m = new THREE.Mesh(S, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); (parent || rig).add(m); return m;
+  const col = new THREE.Color(color);
+  const glowBase = col.clone().lerp(new THREE.Color(0xffffff), 0.25);
+  const glowMat = new THREE.MeshBasicMaterial({ color: glowBase.clone(), fog: false });   // the only colour on them: glowing pupils
+  const bandMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.6, emissive: col.clone().multiplyScalar(0.7) }); // patient wristband
+  const add = (geo, mat, x, y, z, sx, sy, sz, parent) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); (parent || rig).add(m); return m;
   };
-  ball(mBody, 0, 0.55, 0, 0.45, 0.5, 0.42);          // body
-  ball(mLight, 0, 0.5, 0.15, 0.3, 0.34, 0.3);        // belly
-  ball(mBody, 0, 1.28, 0, 0.52, 0.47, 0.5);          // big head
-  ball(mLight, 0, 0.42, -0.4, 0.12, 0.12, 0.12);     // tail
-  const tail = rig.children[rig.children.length - 1];
 
-  // ears
-  for (const sx of [-1, 1]) {
-    if (variant === 0) { ball(mBody, sx * 0.34, 1.68, -0.02, 0.15, 0.15, 0.09); ball(mPink, sx * 0.34, 1.68, 0.06, 0.09, 0.09, 0.04); }
-    else if (variant === 1) {
-      const c = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.34, 4), mBody);
-      c.position.set(sx * 0.3, 1.72, 0); c.rotation.set(0, Math.PI / 4, -sx * 0.3); rig.add(c);
-      ball(mPink, sx * 0.29, 1.68, 0.08, 0.07, 0.11, 0.02);
-    } else { ball(mBody, sx * 0.2, 1.95, -0.02, 0.1, 0.3, 0.07).rotation.z = -sx * 0.15; ball(mPink, sx * 0.2, 1.93, 0.04, 0.05, 0.22, 0.03).rotation.z = -sx * 0.15; }
-  }
-  // eyes (grouped so they can blink), with two sparkle highlights each
+  // gown, hunched back, old stains
+  add(PG.gown, PM.gown, 0, 1.02, 0, 1, 1, 1);
+  add(PG.sph, PM.gown, 0, 1.36, -0.13, 0.2, 0.17, 0.16);
+  add(PG.sph, PM.stain, 0.09, 1.0, 0.31, 0.07, 0.15, 0.015);
+  add(PG.sph, PM.stain, -0.12, 0.72, 0.34, 0.05, 0.09, 0.015);
+  add(PG.cyl, PM.skin, 0, 1.55, 0.02, 0.04, 0.14, 0.04); // thin neck
+
+  // head on a pivot so it can tilt and twitch
+  const head = new THREE.Group(); head.position.set(0, 1.6, 0.03); rig.add(head);
+  const sack = variant === 1;
+  const sx = sack ? 0.2 : 0.185, sy = sack ? 0.28 : 0.26, sz = sack ? 0.22 : 0.205;
+  add(PG.sph, sack ? PM.sack : PM.skin, 0, 0.17, 0.02, sx, sy, sz, head);
+  const fz = (x, y) => 0.02 + sz * Math.sqrt(Math.max(0.02, 1 - (x / sx) * (x / sx) - ((y - 0.17) / sy) * ((y - 0.17) / sy))) + 0.004; // face surface depth
   const eyes = [];
-  for (const sx of [-1, 1]) {
-    const eg = new THREE.Group(); eg.position.set(sx * 0.19, 1.31, 0.43);
-    ball(mEye, 0, 0, 0, 0.085, 0.105, 0.06, eg);
-    ball(mWhite, 0.025, 0.04, 0.035, 0.028, 0.028, 0.02, eg);
-    ball(mWhite, -0.022, -0.03, 0.04, 0.013, 0.013, 0.012, eg);
-    rig.add(eg); eyes.push(eg);
-    ball(mPink, sx * 0.3, 1.2, 0.385, 0.075, 0.05, 0.03);   // blush
-  }
-  ball(mLight, 0, 1.19, 0.42, 0.13, 0.09, 0.09);             // muzzle
-  ball(mDark, 0, 1.215, 0.5, 0.04, 0.03, 0.025);             // nose
-  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.008, 6, 14, Math.PI), mDark);
-  smile.rotation.z = Math.PI; smile.position.set(0, 1.18, 0.505); rig.add(smile);
-
-  // arms + feet on pivots so they can swing
-  const pivot = (x, y, mat, sx, sy, sz, ox, oy, oz) => {
-    const p = new THREE.Group(); p.position.set(x, y, 0); ball(mat, ox, oy, oz, sx, sy, sz, p); rig.add(p); return p;
+  const hole = (x) => {
+    add(PG.sph, PM.dark, x, 0.2, fz(x, 0.2) - 0.012, 0.052, 0.068, 0.03, head);
+    const eg = new THREE.Group(); eg.position.set(x, 0.2, fz(x, 0.2) + 0.012);
+    add(PG.sph, glowMat, 0, 0, 0, 0.016, 0.02, 0.012, eg); head.add(eg); eyes.push(eg);
   };
-  const armL = pivot(-0.42, 0.82, mBody, 0.12, 0.21, 0.12, -0.04, -0.18, 0);
-  const armR = pivot(0.42, 0.82, mBody, 0.12, 0.21, 0.12, 0.04, -0.18, 0);
-  armL.rotation.z = -0.25; armR.rotation.z = 0.25;
-  const footL = pivot(-0.2, 0.2, mLight, 0.15, 0.1, 0.2, 0, -0.1, 0.06);
-  const footR = pivot(0.2, 0.2, mLight, 0.15, 0.1, 0.2, 0, -0.1, 0.06);
+  if (variant === 0) {
+    hole(-0.075); hole(0.075);
+    add(PG.box, PM.dark, 0, 0.115, fz(0, 0.115), 0.012, 0.05, 0.01, head);
+    for (let i = -3; i <= 3; i++) { // wide stitched grin
+      const x = i * 0.026, y = 0.035 + Math.pow(x / 0.1, 2) * 0.03;
+      add(PG.box, PM.dark, x, y, fz(x, y), 0.03, 0.012, 0.008, head);
+      add(PG.box, PM.thread, x, y, fz(x, y) + 0.003, 0.005, 0.06, 0.006, head);
+    }
+  } else if (variant === 1) {
+    hole(0.075);
+    for (const a of [0.8, -0.8]) add(PG.box, PM.thread, -0.075, 0.2, fz(-0.075, 0.2) + 0.004, 0.07, 0.01, 0.006, head).rotation.z = a; // stitched-X eye
+    add(PG.box, PM.thread, 0, 0.04, fz(0, 0.04) + 0.003, 0.17, 0.008, 0.006, head);
+    for (let i = -3; i <= 3; i++) { const x = i * 0.027, y = 0.04; add(PG.box, PM.thread, x, y, fz(x, y) + 0.004, 0.005, 0.05, 0.006, head).rotation.z = i % 2 ? 0.35 : -0.35; }
+    add(PG.cone, PM.sack, 0.01, 0.46, 0.02, 0.07, 0.14, 0.07, head).rotation.z = -0.35; // pinched top of the sack
+    add(PG.ring, PM.band, 0, -0.02, 0.02, 0.15, 0.16, 0.35, head).rotation.x = Math.PI / 2; // rope at the neck
+  } else {
+    hole(0.075);
+    add(PG.box, PM.band, -0.075, 0.2, fz(-0.075, 0.2) + 0.006, 0.1, 0.11, 0.012, head);   // gauze over the left eye
+    add(PG.sph, PM.stain, -0.07, 0.2, fz(-0.075, 0.2) + 0.014, 0.025, 0.035, 0.004, head);
+    for (const [y, tilt] of [[-0.04, 0.1], [0.3, -0.12], [0.37, 0.1], [0.1, -0.2]]) { // bandage wraps
+      const f = Math.sqrt(Math.max(0.05, 1 - Math.pow((y - 0.17) / sy, 2)));
+      add(PG.ring, PM.band, 0, y, 0.02, sx * f + 0.006, sz * f + 0.006, 0.3, head).rotation.x = Math.PI / 2 + tilt;
+    }
+    add(PG.sph, PM.dark, 0, 0.035, fz(0, 0.035) - 0.01, 0.05, 0.07, 0.025, head);          // slack open mouth
+  }
 
+  // long thin arms, wristband on the right one
+  const mkArm = (x, right) => {
+    const p = new THREE.Group(); p.position.set(x, 1.43, 0); rig.add(p);
+    add(PG.cyl, PM.gown, 0, -0.07, 0, 0.055, 0.22, 0.055, p);
+    add(PG.cyl, PM.skin, 0, -0.45, 0, 0.03, 0.62, 0.03, p);
+    add(PG.sph, PM.skin, 0, -0.78, 0, 0.04, 0.07, 0.025, p);
+    for (const fx of [-0.02, 0, 0.02]) add(PG.cyl, PM.skin, fx, -0.87, 0, 0.006, 0.09, 0.006, p).rotation.z = fx * 6;
+    if (right) add(PG.ring, bandMat, 0, -0.7, 0, 0.04, 0.04, 0.2, p).rotation.x = Math.PI / 2;
+    return p;
+  };
+  const armL = mkArm(-0.27, false), armR = mkArm(0.27, true);
+  armL.rotation.z = -0.08; armR.rotation.z = 0.08;
+  // bare, bony legs
+  const mkLeg = (x) => {
+    const p = new THREE.Group(); p.position.set(x, 0.56, 0); rig.add(p);
+    add(PG.cyl, PM.skin, 0, -0.28, 0, 0.045, 0.56, 0.045, p);
+    add(PG.sph, PM.skin, 0, -0.55, 0.04, 0.05, 0.03, 0.1, p);
+    return p;
+  };
+  const footL = mkLeg(-0.12), footR = mkLeg(0.12);
+  // loose strap of the gown, sways behind them
+  const tail = new THREE.Group(); tail.position.set(0, 0.62, -0.36); rig.add(tail);
+  add(PG.box, PM.gown, 0, -0.15, 0, 0.07, 0.34, 0.01, tail);
+
+  const sh = new THREE.Mesh(PG.shadow, PM.shadow); sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; g.add(sh); // cheap contact shadow
   g.add(rig);
-  g.userData = { rig, armL, armR, footL, footR, eyes, tail, phase: Math.random() * 10 };
+  g.userData = { rig, head, armL, armR, footL, footR, eyes, tail, glowMat, glowBase, phase: Math.random() * 10, bubble: null, css: '#' + col.getHexString() };
   scene.add(g);
   return g;
 }
 
 function animateChar(g, moving, t) {
   const u = g.userData; if (!u.rig) return;
-  const ph = t * 11 + u.phase, sw = moving ? Math.sin(ph) : 0;
-  u.rig.position.y = moving ? Math.abs(Math.sin(ph)) * 0.07 : Math.sin(t * 2 + u.phase) * 0.012;  // hop / breathe
-  u.rig.rotation.z = moving ? Math.sin(ph) * 0.07 : 0;
-  u.rig.rotation.x = moving ? 0.08 : 0;
-  u.footL.rotation.x = sw * 0.7; u.footR.rotation.x = -sw * 0.7;
-  u.armL.rotation.x = -sw * 0.9; u.armR.rotation.x = sw * 0.9;
-  u.armL.rotation.z = -0.25 - (moving ? 0 : Math.sin(t * 1.7 + u.phase) * 0.05);
-  u.armR.rotation.z = 0.25 + (moving ? 0 : Math.sin(t * 1.7 + u.phase) * 0.05);
-  u.tail.position.x = Math.sin(t * (moving ? 12 : 3) + u.phase) * 0.05;
-  const blink = ((t + u.phase) % 4.2) < 0.12 ? 0.1 : 1;
+  const ph = t * 6.5 + u.phase, sw = moving ? Math.sin(ph) : 0, br = Math.sin(t * 1.3 + u.phase);
+  u.rig.position.y = moving ? Math.abs(Math.sin(ph)) * 0.025 : br * 0.006;      // slow shuffle / shallow breathing
+  u.rig.rotation.x = moving ? 0.16 : 0.07 + br * 0.01;                          // hunched, leaning forward
+  u.rig.rotation.z = moving ? Math.sin(ph) * 0.05 : Math.sin(t * 0.4 + u.phase) * 0.015;
+  u.footL.rotation.x = sw * 0.5; u.footR.rotation.x = -sw * 0.5;
+  const sway = Math.sin(t * 0.9 + u.phase) * 0.02;
+  u.armL.rotation.x = 0.12 - sw * 0.18; u.armR.rotation.x = 0.12 + sw * 0.18;
+  u.armL.rotation.z = -0.08 - sway; u.armR.rotation.z = 0.08 + sway;
+  // head drifts slowly, then every so often snaps sideways
+  const k = Math.floor(t * 5 + u.phase * 3), tw = hash(k + u.phase) > 0.94 ? 1 : 0;
+  u.head.rotation.z = 0.16 + Math.sin(t * 0.6 + u.phase) * 0.05 + tw * (hash(k * 1.7) - 0.5) * 0.5;
+  u.head.rotation.y = Math.sin(t * 0.35 + u.phase) * (moving ? 0.1 : 0.25) + tw * (hash(k * 2.3) - 0.5) * 0.9;
+  u.head.rotation.x = -0.06 + Math.sin(t * 0.5 + u.phase) * 0.03;
+  u.tail.rotation.x = Math.sin(t * (moving ? 5 : 1.3) + u.phase) * 0.12;
+  // rare slow blink + glowing pupils that flicker
+  const blink = ((t + u.phase) % 6.5) < 0.18 ? 0.05 : 1;
   for (const e of u.eyes) e.scale.y = blink;
+  const gl = 0.8 + 0.2 * Math.sin(t * 3 + u.phase) + (hash(Math.floor(t * 14) + u.phase * 7) < 0.04 ? -0.6 : 0);
+  u.glowMat.color.copy(u.glowBase).multiplyScalar(Math.max(0.2, gl));
+  if (u.bubble) {
+    const age = t - u.bubbleT;
+    if (age > 8) disposeBubble(g); else if (age > 6.8) u.bubble.material.opacity = Math.max(0, (8 - age) / 1.2);
+  }
 }
+
+// ---------- speech bubbles over heads ----------
+function disposeBubble(g) {
+  const u = g.userData; if (!u.bubble) return;
+  g.remove(u.bubble); u.bubble.material.map.dispose(); u.bubble.material.dispose(); u.bubble = null;
+}
+function showBubble(g, text) {
+  const u = g.userData; if (!u.rig) return;
+  disposeBubble(g);
+  const FONT = '600 24px "Courier New", ui-monospace, monospace', MAXW = 420, LH = 30, PAD = 16, TAIL = 12;
+  const mctx = mkCanvas(8, 8).getContext('2d'); mctx.font = FONT;
+  const lines = []; let cur = '';
+  for (const w of text.replace(/(\S{22})/g, '$1 ').split(' ')) {
+    const test = cur ? cur + ' ' + w : w;
+    if (mctx.measureText(test).width > MAXW && cur) { lines.push(cur); cur = w; } else cur = test;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > 3) { lines.length = 3; lines[2] = lines[2].slice(0, -1) + '\u2026'; }
+  let tw = 0; for (const l of lines) tw = Math.max(tw, mctx.measureText(l).width);
+  const W = Math.ceil(tw) + PAD * 2, H = lines.length * LH + PAD * 2 + TAIL;
+  const c = mkCanvas(W, H), x = c.getContext('2d');
+  x.fillStyle = 'rgba(6,8,10,0.9)'; x.fillRect(0, 0, W, H - TAIL);
+  x.strokeStyle = u.css; x.lineWidth = 2; x.strokeRect(1, 1, W - 2, H - TAIL - 2);
+  x.fillStyle = 'rgba(6,8,10,0.9)'; x.beginPath(); x.moveTo(W / 2 - 9, H - TAIL - 1); x.lineTo(W / 2, H - 1); x.lineTo(W / 2 + 9, H - TAIL - 1); x.fill();
+  x.font = FONT; x.textBaseline = 'top'; x.fillStyle = '#dbe5ea';
+  lines.forEach((l, i) => x.fillText(l, PAD, PAD + i * LH));
+  const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
+  spr.center.set(0.5, 0); spr.scale.set(W / 150, H / 150, 1); spr.position.set(0, 2.3, 0);
+  g.add(spr); u.bubble = spr; u.bubbleT = performance.now() / 1000;
+}
+function disposePlayer(g) { disposeBubble(g); g.userData.glowMat.dispose(); scene.remove(g); }
 
 const me = makePlayer(0x8fd0ff, 0);
 me.position.set(0, 0, 3);
 me.rotation.y = Math.PI; // face the TV
 
 const remotes = {}; // id -> { mesh, x, z, ry }
+const hueOf = (id) => Array.from(String(id)).reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
 function getRemote(id) {
   if (!remotes[id]) {
-    const hue = [...id].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
-    const mesh = makePlayer(new THREE.Color(`hsl(${hue}, 80%, 74%)`), hue % 3);
-    remotes[id] = { mesh, x: 0, z: 3, ry: 0 };
+    const hue = hueOf(id);
+    remotes[id] = { mesh: makePlayer(new THREE.Color('hsl(' + hue + ', 75%, 58%)'), hue % 3), x: 0, z: 3, ry: 0 };
   }
   return remotes[id];
 }
@@ -899,6 +1156,7 @@ function toggleCamera() {
   updateCamLabel();
 }
 
+let lastH = [NaN, 0, 0, 0, 0], camWantC = 0, camCollC = false; // the wall-collision ray is only re-cast when the view actually changed
 function updateCamera(dt) {
   head.set(me.position.x, me.position.y + HEAD_Y, me.position.z);
   const cp = Math.cos(pitch);
@@ -907,11 +1165,16 @@ function updateCamera(dt) {
   const modeDist = mode === 'third' ? TP_DIST : 0;
   let want = modeDist, collided = false;
   if (modeDist > 0) { // keep the camera inside the room
-    back.copy(dir).negate();
-    camRay.set(head, back);
-    camRay.far = modeDist + 0.3;
-    const hit = camRay.intersectObjects(colliders, false)[0];
-    if (hit && hit.distance - 0.25 < modeDist) { want = Math.max(0, hit.distance - 0.25); collided = true; }
+    if (head.x !== lastH[0] || head.z !== lastH[1] || yaw !== lastH[2] || pitch !== lastH[3] || modeDist !== lastH[4]) {
+      lastH = [head.x, head.z, yaw, pitch, modeDist];
+      back.copy(dir).negate();
+      camRay.set(head, back);
+      camRay.far = modeDist + 0.3;
+      const hit = camRay.intersectObjects(colliders, false)[0];
+      camCollC = !!(hit && hit.distance - 0.25 < modeDist);
+      camWantC = camCollC ? Math.max(0, hit.distance - 0.25) : modeDist;
+    }
+    want = camWantC; collided = camCollC;
   }
   if (collided && want < camDist) camDist = want;                     // snap in when a wall is behind
   else camDist += (want - camDist) * (1 - Math.exp(-dt * 10));        // otherwise glide
@@ -932,12 +1195,15 @@ function pickTV(ev) {
 }
 function openControls() {
   controlsOpen = true;
-  $('player').style.display = 'flex';
+  $('deck').classList.add('show');
+  document.body.classList.add('deck-open');
   if (document.pointerLockElement) document.exitPointerLock();
+  refreshDeck();
 }
 function closeControls() {
   controlsOpen = false;
-  $('player').style.display = 'none';
+  $('deck').classList.remove('show');
+  document.body.classList.remove('deck-open');
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
 }
 function lockMouse() {
@@ -947,18 +1213,31 @@ function lockMouse() {
 
 // ---------- input ----------
 const keys = {};
+const joy = { x: 0, y: 0 };
 const typing = (e) => e.target && e.target.tagName === 'INPUT' && e.target.type === 'text';
+function deckKey(e, k) { // shortcuts while the TV controls are open
+  if (e.target && e.target.type === 'range') return false;
+  if (k === ' ') { e.preventDefault(); togglePlay(); return true; }
+  if (k === 'arrowleft' || k === 'arrowright') { e.preventDefault(); if (playerReady) seekTo(player.getCurrentTime() + (k === 'arrowleft' ? -5 : 5)); return true; }
+  if (k === 'arrowup' || k === 'arrowdown') {
+    e.preventDefault(); volume = Math.max(0, Math.min(100, volume + (k === 'arrowup' ? 5 : -5))); muted = volume === 0; saveVol(); applyVolume(); return true;
+  }
+  if (k === 'm') { toggleMute(); return true; }
+  return false;
+}
 addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { if (controlsOpen) closeControls(); return; }
-  if (!joined || typing(e)) return;
+  if (e.key === 'Escape') { if (chatOpen) closeChat(); else if (controlsOpen) closeControls(); return; }
+  if (!joined || typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
+  if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
+  if (controlsOpen && deckKey(e, k)) return;
   if (k === 'v') toggleCamera();
   else if (k === 'f') toggleLight();
   else if (k === 'e') { if (controlsOpen) closeControls(); else if (pickTV()) openControls(); }
   else keys[k] = true;
 });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; joy.x = joy.y = 0; });
 
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === document.body;
@@ -966,16 +1245,19 @@ document.addEventListener('pointerlockchange', () => {
 });
 addEventListener('mousemove', (e) => {
   if (!locked) return;
-  yaw -= e.movementX * SENS;
-  pitch -= e.movementY * SENS;
+  yaw -= (e.movementX || 0) * SENS;
+  pitch -= (e.movementY || 0) * SENS;
   clampPitch();
 });
 addEventListener('mousedown', (e) => {
-  if (!joined || e.button !== 0 || e.target.closest('.bar, #join, #tv')) return;
+  if (!joined || e.button !== 0) return;
+  if (e.target.closest && e.target.closest('#chat')) return;
+  if (chatOpen) closeChat();
+  if (e.target.closest && e.target.closest('.bar, .deck, #join, #tv, #joy')) return;
   if (pickSwitch(e)) { toggleLight(); return; }          // click the light switch
   if (locked) { if (pickTV()) openControls(); }          // click on the TV while looking around
   else if (pickTV(e)) openControls();                    // click on the TV with the cursor
-  else { if (controlsOpen) closeControls(); lockMouse(); } // click anywhere else: mouse look
+  else { if (controlsOpen) closeControls(); if (!IS_TOUCH) lockMouse(); } // click anywhere else: mouse look
 });
 
 // ---------- networking: players ----------
@@ -988,10 +1270,82 @@ function sendPos(force) {
   socket.emit('move', { x: me.position.x, z: me.position.z, ry: me.rotation.y });
 }
 socket.on('player-joined', () => sendPos(true)); // tell the newcomer where I am
-socket.on('move', (p) => { const r = getRemote(p.id); r.x = p.x; r.z = p.z; r.ry = p.ry; });
-socket.on('player-left', (id) => {
-  if (remotes[id]) { scene.remove(remotes[id].mesh); delete remotes[id]; }
+socket.on('move', (p) => {
+  const isNew = !remotes[p.id], r = getRemote(p.id);
+  r.x = p.x; r.z = p.z; r.ry = p.ry;
+  if (isNew) { r.mesh.position.set(p.x, 0, p.z); r.mesh.rotation.y = p.ry; } // appear where they are, don't slide in from the origin
 });
+socket.on('player-left', (id) => {
+  if (remotes[id]) { disposePlayer(remotes[id].mesh); delete remotes[id]; }
+});
+
+// ---------- chat ----------
+const chatEl = $('chat'), chatLog = $('chatLog'), chatInput = $('chatInput'), chatForm = $('chatForm');
+let chatOpen = false, chatBC = null, lastChatSent = 0;
+const seenMsgs = new Set();
+const patientName = (id) => 'PATIENT ' + String(id || '????').slice(-4).toUpperCase();
+const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+
+function addChatLine(name, text, color, cls) {
+  const d = document.createElement('div'); d.className = 'line' + (cls ? ' ' + cls : '');
+  if (name) { const n = document.createElement('b'); n.textContent = name + ': '; if (color) n.style.color = color; d.appendChild(n); }
+  const s = document.createElement('span'); s.textContent = text; d.appendChild(s); // textContent: chat can never inject HTML
+  chatLog.appendChild(d);
+  while (chatLog.children.length > 80) chatLog.removeChild(chatLog.firstChild);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+function blip() {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const t0 = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(520, t0); o.frequency.exponentialRampToValueAtTime(260, t0 + 0.12);
+    g.gain.setValueAtTime(0.04, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.14);
+    o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0 + 0.15);
+  } catch (e) {}
+}
+function receiveChat(m) {
+  if (!m || typeof m.text !== 'string') return;
+  if (m.mid) { // the same message can arrive by two routes (server + same-browser channel)
+    if (seenMsgs.has(m.mid)) return;
+    seenMsgs.add(m.mid);
+    if (seenMsgs.size > 300) seenMsgs.delete(seenMsgs.values().next().value);
+  }
+  if (m.id && m.id === socket.id) return;
+  const text = cleanText(m.text); if (!text) return;
+  addChatLine(patientName(m.id), text, 'hsl(' + hueOf(m.id || 'x') + ', 60%, 68%)');
+  if (remotes[m.id]) showBubble(remotes[m.id].mesh, text);
+  blip();
+}
+function sendChat(text) {
+  const mid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  seenMsgs.add(mid);
+  addChatLine('YOU', text, '#cfe8ff');
+  showBubble(me, text);
+  socket.emit('chat', { text, mid });
+  if (chatBC) { try { chatBC.postMessage({ id: socket.id, text, mid }); } catch (e) {} }
+}
+function openChat() {
+  if (!joined) return;
+  chatOpen = true; chatEl.classList.add('open');
+  if (document.pointerLockElement) document.exitPointerLock();
+  for (const k in keys) keys[k] = false;
+  chatInput.focus();
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+function closeChat() { chatOpen = false; chatEl.classList.remove('open'); chatInput.blur(); }
+chatForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = cleanText(chatInput.value), now = Date.now();
+  chatInput.value = '';
+  if (text && now - lastChatSent > 600) { lastChatSent = now; sendChat(text); }
+  closeChat();
+  if (!IS_TOUCH && !controlsOpen) lockMouse();
+});
+$('chatBtn').onclick = () => { chatOpen ? closeChat() : openChat(); $('chatBtn').blur(); };
+socket.on('chat', receiveChat);
+socket.on('player-joined', () => addChatLine('', 'Someone entered the room.', null, 'sys'));
+socket.on('player-left', () => addChatLine('', 'Someone left.', null, 'sys'));
 
 // ---------- YouTube on the TV ----------
 const tv = $('tv');
@@ -1005,7 +1359,7 @@ function quiet() { suppressUntil = Date.now() + 800; } // ignore player events w
 function applyVideo(v) {
   if (!ytReady || (player && !playerReady)) { pending = v; return; }
   pending = null;
-  tvOn = true;
+  tvOn = true; _pt.dirty = true;
   tv.style.display = 'block';
   screen.material = holeMat;
   quiet();
@@ -1016,7 +1370,7 @@ function applyVideo(v) {
       width: '100%', height: '100%', videoId: v.id,
       playerVars: { playsinline: 1, start: Math.floor(v.time || 0) },
       events: {
-        onReady: (e) => { playerReady = true; v.playing ? e.target.playVideo() : e.target.pauseVideo(); if (pending) applyVideo(pending); },
+        onReady: (e) => { playerReady = true; applyVolume(); v.playing ? e.target.playVideo() : e.target.pauseVideo(); if (pending) applyVideo(pending); },
         onStateChange: onPlayerState,
         onError: (e) => alert('YouTube could not play this video (error ' + e.data + '). Some videos block embedding, try another.')
       }
@@ -1046,9 +1400,33 @@ function youtubeId(url) {
   return m ? m[1] : null;
 }
 
-// ---------- playback bar (all actions go through Socket.IO) ----------
+// ---------- playback deck (all actions go through Socket.IO) ----------
+const deck = $('deck'), seekEl = $('seek'), volEl = $('vol'), playBtn = $('playBtn'), muteBtn = $('muteBtn');
+const curLbl = $('curLbl'), durLbl = $('durLbl'), titleEl = $('deckTitle'), stateEl = $('deckState');
+let volume = 80, muted = false, titleVid = null;
+try { const sv = localStorage.getItem('rm_vol'); if (sv !== null && !isNaN(+sv)) volume = Math.max(0, Math.min(100, +sv)); } catch (e) {}
+const saveVol = () => { try { localStorage.setItem('rm_vol', String(volume)); } catch (e) {} };
 const isPlaying = () => playerReady && (player.getPlayerState() === 1 || player.getPlayerState() === 3);
 function sendState(playing, time) { socket.emit('video-state', { playing, time }); }
+function setRange(el, p, b) { el.style.setProperty('--p', p + '%'); el.style.setProperty('--b', Math.max(p, b == null ? p : b) + '%'); }
+function fmt(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+}
+
+function refreshVolUI() {
+  const v = muted ? 0 : volume;
+  volEl.value = v; setRange(volEl, v);
+  muteBtn.classList.toggle('muted', muted || volume === 0);
+}
+function applyVolume() {
+  if (playerReady) { try { player.setVolume(volume); if (muted) player.mute(); else player.unMute(); } catch (e) {} }
+  refreshVolUI();
+}
+function toggleMute() { muted = !muted; if (!muted && volume === 0) volume = 50; saveVol(); applyVolume(); }
+volEl.addEventListener('input', () => { volume = +volEl.value; muted = volume === 0; saveVol(); applyVolume(); });
+muteBtn.onclick = () => { toggleMute(); muteBtn.blur(); };
 
 function togglePlay() {
   if (!playerReady) return;
@@ -1056,6 +1434,7 @@ function togglePlay() {
   quiet();
   play ? player.playVideo() : player.pauseVideo();
   sendState(play, t);
+  refreshDeck();
 }
 function seekTo(t) {
   if (!playerReady) return;
@@ -1064,37 +1443,55 @@ function seekTo(t) {
   quiet();
   player.seekTo(t, true);
   sendState(isPlaying(), t);
-}
-function fmt(s) {
-  s = Math.max(0, Math.floor(s || 0));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+  refreshDeck();
 }
 
-$('playBtn').onclick = () => { togglePlay(); $('playBtn').blur(); };
+function refreshDeck() {
+  const has = !!(playerReady && currentVid);
+  deck.classList.toggle('idle', !has);
+  if (!has) {
+    deck.classList.remove('playing'); playBtn.classList.remove('on');
+    stateEl.textContent = tvOn ? 'LOADING' : 'NO TAPE';
+    if (!tvOn) titleEl.textContent = 'Paste a YouTube link below to load a tape';
+    return;
+  }
+  const st = player.getPlayerState(), playing = st === 1 || st === 3;
+  deck.classList.toggle('playing', st === 1);
+  playBtn.classList.toggle('on', playing);
+  stateEl.textContent = st === 3 ? 'BUFFERING' : st === 1 ? 'PLAY' : st === 0 ? 'END' : 'PAUSE';
+  if (titleVid !== currentVid) {
+    try { const d = player.getVideoData(); if (d && d.title) { titleEl.textContent = d.title; titleVid = currentVid; } } catch (e) {}
+  }
+  const cur = player.getCurrentTime() || 0, dur = player.getDuration() || 0;
+  if (!dragging) {
+    seekEl.max = dur || 1; seekEl.value = cur;
+    let buf = 0; try { buf = (player.getVideoLoadedFraction() || 0) * 100; } catch (e) {}
+    setRange(seekEl, dur ? Math.min(100, cur / dur * 100) : 0, buf);
+    curLbl.textContent = fmt(cur); durLbl.textContent = fmt(dur);
+  }
+}
+
+playBtn.onclick = () => { togglePlay(); playBtn.blur(); };
 $('backBtn').onclick = () => { if (playerReady) seekTo(player.getCurrentTime() - 10); $('backBtn').blur(); };
 $('fwdBtn').onclick = () => { if (playerReady) seekTo(player.getCurrentTime() + 10); $('fwdBtn').blur(); };
-$('seek').oninput = () => { dragging = true; $('timeLbl').textContent = fmt($('seek').value) + ' / ' + fmt($('seek').max); };
-$('seek').onchange = () => { dragging = false; seekTo(parseFloat($('seek').value)); $('seek').blur(); };
+seekEl.addEventListener('input', () => {
+  dragging = true;
+  const v = parseFloat(seekEl.value), m = parseFloat(seekEl.max) || 1;
+  setRange(seekEl, v / m * 100); curLbl.textContent = fmt(v);
+});
+seekEl.addEventListener('change', () => { dragging = false; seekTo(parseFloat(seekEl.value)); seekEl.blur(); });
 $('loadBtn').onclick = () => {
   const id = youtubeId($('url').value.trim());
   if (!id) return alert('Could not read that YouTube link');
   socket.emit('video-load', id);
+  $('url').value = ''; $('url').blur();
 };
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadBtn').click(); });
 $('closeBtn').onclick = closeControls;
 $('tvBtn').onclick = () => (controlsOpen ? closeControls() : openControls());
+refreshVolUI();
 
-setInterval(() => {
-  if (!controlsOpen || !playerReady) return;
-  const cur = player.getCurrentTime() || 0, dur = player.getDuration() || 0;
-  if (!dragging) {
-    $('seek').max = dur || 1;
-    $('seek').value = cur;
-    $('timeLbl').textContent = fmt(cur) + ' / ' + fmt(dur);
-  }
-  $('playBtn').textContent = isPlaying() ? '\u23F8' : '\u25B6';
-}, 250);
+setInterval(() => { if (controlsOpen) refreshDeck(); }, 250);
 
 // ---------- pin the YouTube player onto the 3D TV screen ----------
 // Solves the perspective transform that maps the player rectangle onto the TV screen's
@@ -1130,6 +1527,9 @@ function homography(src, dst) {
 
 function placeTV() {
   if (!tvOn) return;
+  const c = camera, p = _pt; // nothing to do while the view hasn't moved
+  if (!p.dirty && c.position.x === p.x && c.position.y === p.y && c.position.z === p.z && c.rotation.x === p.rx && c.rotation.y === p.ry) return;
+  p.dirty = false; p.x = c.position.x; p.y = c.position.y; p.z = c.position.z; p.rx = c.rotation.x; p.ry = c.rotation.y;
   const dst = [];
   for (const c of tvCorners) {
     tmpV.copy(c).applyMatrix4(camera.matrixWorldInverse);
@@ -1146,6 +1546,9 @@ function placeTV() {
 // ---------- join UI ----------
 const codeInput = $('code');
 codeInput.value = Math.random().toString(36).slice(2, 6).toUpperCase();
+codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
+$('camMode').onclick = () => { toggleCamera(); $('camMode').blur(); };
+const helpEl = $('help');
 $('joinBtn').onclick = () => {
   const code = codeInput.value.trim().toUpperCase();
   if (!code) return;
@@ -1154,9 +1557,50 @@ $('joinBtn').onclick = () => {
   $('roomLabel').textContent = code;
   $('join').style.display = 'none';
   $('bar').style.display = 'flex';
+  chatEl.style.display = 'flex';
+  document.body.classList.add('in-room');
   updateCamLabel();
   sendPos(true);
+  try { chatBC = new BroadcastChannel('roommate-chat-' + code); chatBC.onmessage = (ev) => receiveChat(ev.data); } catch (e) { chatBC = null; }
+  addChatLine('', 'You are not alone in here.', null, 'sys');
+  helpEl.textContent = IS_TOUCH ? 'Left stick: move   Drag: look   Tap the TV or the switch'
+                                : 'Click to look around   WASD move   V camera   E TV   F light   T chat';
+  helpEl.classList.add('show'); setTimeout(() => helpEl.classList.remove('show'), 9000);
 };
+
+// ---------- touch controls (joystick + drag to look) ----------
+if (IS_TOUCH) {
+  document.body.classList.add('touch');
+  const joyEl = $('joy'), knob = $('knob'); let joyId = null, jcx = 0, jcy = 0;
+  const moveJoy = (e) => {
+    let dx = e.clientX - jcx, dy = e.clientY - jcy; const R = 46, l = Math.hypot(dx, dy);
+    if (l > R) { dx = dx / l * R; dy = dy / l * R; }
+    knob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    joy.x = dx / R; joy.y = dy / R;
+    if (Math.hypot(joy.x, joy.y) < 0.2) { joy.x = 0; joy.y = 0; }
+  };
+  joyEl.addEventListener('pointerdown', (e) => {
+    joyId = e.pointerId; try { joyEl.setPointerCapture(e.pointerId); } catch (err) {}
+    const r = joyEl.getBoundingClientRect(); jcx = r.left + r.width / 2; jcy = r.top + r.height / 2;
+    moveJoy(e); e.preventDefault();
+  });
+  joyEl.addEventListener('pointermove', (e) => { if (e.pointerId === joyId) moveJoy(e); });
+  const endJoy = (e) => { if (e.pointerId === joyId) { joyId = null; joy.x = joy.y = 0; knob.style.transform = 'translate(0,0)'; } };
+  joyEl.addEventListener('pointerup', endJoy); joyEl.addEventListener('pointercancel', endJoy);
+
+  let lookId = null, lx = 0, ly = 0;
+  addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || lookId !== null || !joined) return;
+    if (e.target.closest && e.target.closest('.bar, .deck, #chat, #joy, #tv, #join')) return;
+    lookId = e.pointerId; lx = e.clientX; ly = e.clientY;
+  });
+  addEventListener('pointermove', (e) => {
+    if (e.pointerId !== lookId) return;
+    yaw -= (e.clientX - lx) * 0.006; pitch -= (e.clientY - ly) * 0.006; lx = e.clientX; ly = e.clientY; clampPitch();
+  });
+  const endLook = (e) => { if (e.pointerId === lookId) lookId = null; };
+  addEventListener('pointerup', endLook); addEventListener('pointercancel', endLook);
+}
 
 // ---------- main loop ----------
 function angDiff(a, b) {
@@ -1166,17 +1610,30 @@ function angDiff(a, b) {
   return d;
 }
 
-let prev = performance.now();
+let prev = performance.now(), frameNo = 0, perfAcc = 0, perfN = 0, perfT = 0, lastPromptT = 0;
+document.addEventListener('visibilitychange', () => { prev = performance.now(); });
 function loop(now) {
   requestAnimationFrame(loop);
-  const dt = Math.min((now - prev) / 1000, 0.1);
+  const raw = now - prev;
+  const dt = Math.min(raw / 1000, 0.1);
   prev = now;
+  frameNo++;
+  if (frameNo === 2 || frameNo === 60) renderer.shadowMap.needsUpdate = true; // shadows are static: rendered once, not every frame
 
-  // WASD is relative to where the camera looks
-  const fw = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0);
-  const st = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+  // adaptive quality: if the last ~2s averaged slower than ~38fps, drop a step
+  if (raw < 250) { perfAcc += raw; perfN++; perfT += raw; }
+  if (perfT > 2000) {
+    if (frameNo > 150 && perfAcc / perfN > 26 && quality < 2) setQuality(quality + 1);
+    perfAcc = perfN = perfT = 0;
+  }
+
+  // WASD / joystick are relative to where the camera looks
+  let fw = (keys['w'] ? 1 : 0) - (keys['s'] ? 1 : 0) - joy.y;
+  let st = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0) + joy.x;
+  fw = Math.max(-1, Math.min(1, fw)); st = Math.max(-1, Math.min(1, st));
   let dx = 0, dz = 0;
-  if (fw || st) {
+  const moving = Math.abs(fw) > 0.01 || Math.abs(st) > 0.01;
+  if (moving) {
     dx = -Math.sin(yaw) * fw + Math.cos(yaw) * st;
     dz = -Math.cos(yaw) * fw - Math.sin(yaw) * st;
     const len = Math.hypot(dx, dz);
@@ -1186,33 +1643,40 @@ function loop(now) {
     pushOutOfBed();
   }
   if (mode === 'first') me.rotation.y = yaw + Math.PI;                       // body follows where you look
-  else if (fw || st) me.rotation.y += angDiff(me.rotation.y, Math.atan2(dx, dz)) * (1 - Math.exp(-dt * 14));
+  else if (moving) me.rotation.y += angDiff(me.rotation.y, Math.atan2(dx, dz)) * (1 - Math.exp(-dt * 14));
   if (now - lastSent > 50) { lastSent = now; sendPos(false); }
 
+  const ts = now / 1000, ra = 1 - Math.exp(-dt * 18); // frame-rate independent smoothing
   for (const id in remotes) {
     const r = remotes[id];
-    const moving = Math.hypot(r.x - r.mesh.position.x, r.z - r.mesh.position.z) > 0.02;
-    r.mesh.position.x += (r.x - r.mesh.position.x) * 0.3;
-    r.mesh.position.z += (r.z - r.mesh.position.z) * 0.3;
-    r.mesh.rotation.y = r.ry;
-    animateChar(r.mesh, moving, now / 1000);
+    const rm = Math.hypot(r.x - r.mesh.position.x, r.z - r.mesh.position.z) > 0.02;
+    r.mesh.position.x += (r.x - r.mesh.position.x) * ra;
+    r.mesh.position.z += (r.z - r.mesh.position.z) * ra;
+    r.mesh.rotation.y += angDiff(r.mesh.rotation.y, r.ry) * ra;
+    animateChar(r.mesh, rm, ts);
   }
-  animateChar(me, !!(fw || st), now / 1000);
+  animateChar(me, moving, ts);
 
-  animateEnvironment(now / 1000);
+  animateEnvironment(ts);
   updateCamera(dt);
   renderer.render(scene, camera);
   placeTV();
-  $('prompt').style.display = (joined && !controlsOpen && pickTV()) ? 'block' : 'none';
+  if (now - lastPromptT > 120) { // the "E: TV controls" hint needs a ray cast: 8x a second is plenty
+    lastPromptT = now;
+    setShown(promptEl, joined && !controlsOpen && !chatOpen && pickTV());
+  }
 }
 updateCamLabel();
 requestAnimationFrame(loop);
 
-addEventListener('resize', () => {
+function onResize() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-});
+  _pt.dirty = true;
+}
+addEventListener('resize', onResize);
+addEventListener('orientationchange', () => setTimeout(onResize, 250));
 </script>
 </body>
 </html>
