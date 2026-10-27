@@ -1470,7 +1470,7 @@ fv.addEventListener('loadedmetadata', () => {
 });
 fv.addEventListener('error', () => {
   if (activeKind !== 'file' || !fv.src) return;
-  alert('The TV could not play this video file (blocked, expired link, or unsupported format).');
+  alert('The TV could not play this video link. It needs to be a direct file link (.mp4 / .webm / .m3u8) that is still valid, and the format must be supported by your browser.');
 });
 
 function showKind(kind) { // switch the TV between the YouTube iframe and the video file element
@@ -1636,24 +1636,20 @@ seekEl.addEventListener('input', () => {
   setRange(seekEl, v / m * 100); curLbl.textContent = fmt(v);
 });
 seekEl.addEventListener('change', () => { dragging = false; seekTo(parseFloat(seekEl.value)); seekEl.blur(); });
-$('loadBtn').onclick = async () => {
+$('loadBtn').onclick = () => {
   const raw = $('url').value.trim();
   if (!raw) return;
   const id = youtubeId(raw);
   if (id) { socket.emit('video-load', { kind: 'yt', id }); $('url').value = ''; $('url').blur(); return; }
-  if (!/^https?:\/\//i.test(raw)) return alert('Paste a YouTube link or a video / download link (https://...)');
-  const btn = $('loadBtn'); btn.disabled = true; btn.textContent = '...';
-  try {
-    const r = await fetch('/api/resolve?url=' + encodeURIComponent(raw));
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'Could not resolve link');
-    // mp4/webm go through the server proxy (no CORS / hotlink trouble, seeking works); HLS playlists load directly
-    const url = j.type === 'hls' ? j.url : '/proxy?u=' + encodeURIComponent(j.url);
-    socket.emit('video-load', { kind: 'file', url, title: j.title });
-    $('url').value = ''; $('url').blur();
-  } catch (err) {
-    alert('Could not load that link: ' + err.message);
-  } finally { btn.disabled = false; btn.textContent = 'LOAD'; }
+  let u;
+  try { u = new URL(raw); } catch (e) { u = null; }
+  if (!u || !/^https?:$/.test(u.protocol)) return alert('Paste a YouTube link or a direct video link (https://... .mp4 / .webm / .m3u8)');
+  if (u.protocol === 'http:' && location.protocol === 'https:') return alert('This site is on https, so the browser blocks http video links. Use an https link.');
+  // direct file: every viewer's browser loads it straight from the host (nothing goes through this server)
+  let title = 'video';
+  try { title = decodeURIComponent(u.pathname.split('/').pop() || '') || u.hostname; } catch (e) { title = u.hostname; }
+  socket.emit('video-load', { kind: 'file', url: u.href, title });
+  $('url').value = ''; $('url').blur();
 };
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadBtn').click(); });
 $('closeBtn').onclick = closeControls;
