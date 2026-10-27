@@ -377,3 +377,4 @@ module.exports = function mountWebProxy(app) {
 
   app.all(/^\/web\/https?\//i, express.raw({ type: () => true, limit: '1mb' }), handle);
 };
+module.exports.isPrivateIp = isPrivateIp;
