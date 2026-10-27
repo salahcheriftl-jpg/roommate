@@ -87,6 +87,9 @@
   .load input:focus { outline: none; border-color: #6a2a26; }
   .load button { padding: 0 14px; font-size: 12px; letter-spacing: 2px; }
   .deck.idle .transport, .deck.idle .seekwrap { opacity: .35; pointer-events: none; }
+  #tv canvas#live { position: absolute; left: 0; top: 0; width: 1280px; height: 713px; transform: scale(.634375); transform-origin: 0 0; background: #000; display: none; outline: none; }
+  .load #modeBtn { padding: 0 10px; font-size: 11px; letter-spacing: 1px; }
+  .load #modeBtn.on { color: #ff6a5e; border-color: #6a2a26; }
   .webnav { display: none; align-items: center; gap: 6px; }
   .webnav button { width: auto; min-width: 38px; padding: 0 9px; font-size: 14px; }
   .webnav #wHome { font-size: 11px; letter-spacing: 1px; }
@@ -196,6 +199,7 @@
     </div>
     <div class="load">
       <input type="text" id="url" placeholder="YouTube / video link, website, or search Google" autocomplete="off">
+      <button id="modeBtn" title="LIVE = a real browser on the server (captchas, logins, no sound). LITE = light proxy.">LIVE</button>
       <button id="loadBtn">LOAD</button>
     </div>
   </div>
@@ -1463,25 +1467,80 @@ const webFrame = document.createElement('iframe');
 webFrame.id = 'web';
 webFrame.setAttribute('sandbox', 'allow-scripts allow-forms'); // pages can never reach ROOMMATE itself
 tv.appendChild(webFrame);
-let webCur = null, webTitle = '';
+let webCur = null, webTitle = '', webMode = 'proxy';
+
+// ----- LIVE mode: a real Chromium runs on the server and is streamed here as pictures; the mouse and
+// keyboard go back to it (everyone in the room shares it). The TV shows a canvas instead of an iframe.
+const LW = 1280, LH = 720;
+const liveCv = document.createElement('canvas');
+liveCv.id = 'live'; liveCv.width = LW; liveCv.height = LH; liveCv.tabIndex = 0;
+tv.appendChild(liveCv);
+const lctx = liveCv.getContext('2d');
+let liveOk = false, wantLive = true;
+try { wantLive = localStorage.getItem('rm_live') !== '0'; } catch (e) {}
+const curMode = () => (wantLive && liveOk ? 'live' : 'proxy');
+function refreshMode() { const l = curMode() === 'live'; $('modeBtn').textContent = l ? 'LIVE' : 'LITE'; $('modeBtn').classList.toggle('on', l); }
+socket.on('caps', (c) => { liveOk = !!(c && c.live); refreshMode(); });
+let drawing = false, nextFrame = null;
+socket.on('live-frame', (buf) => {
+  if (activeKind !== 'web' || webMode !== 'live') return;
+  nextFrame = buf;
+  if (drawing) return;
+  drawing = true;
+  (function go() {
+    const b = nextFrame; nextFrame = null;
+    if (!b) { drawing = false; return; }
+    createImageBitmap(new Blob([b], { type: 'image/jpeg' })).then((bm) => { lctx.drawImage(bm, 0, 0, LW, LH); bm.close(); go(); }, () => { drawing = false; });
+  })();
+});
+socket.on('live-url', (d) => {
+  if (!d || webMode !== 'live') return;
+  if (d.url) webCur = d.url;
+  webTitle = d.error ? 'Error: ' + d.error : d.title || '';
+});
+const sendLive = (o) => socket.emit('live-input', o);
+// offsetX/Y are in the canvas's own (un-transformed) pixels, so they stay right on the tilted 3D TV
+const lpos = (e) => ({ x: Math.round(e.offsetX * LW / liveCv.offsetWidth), y: Math.round(e.offsetY * LH / liveCv.offsetHeight) });
+let lastMove = 0;
+liveCv.addEventListener('mousemove', (e) => { const n = performance.now(); if (n - lastMove < 16) return; lastMove = n; sendLive({ t: 'mouse', type: 'move', ...lpos(e), buttons: e.buttons }); });
+liveCv.addEventListener('mousedown', (e) => { e.preventDefault(); liveCv.focus(); sendLive({ t: 'mouse', type: 'down', ...lpos(e), button: e.button, buttons: e.buttons, detail: e.detail }); });
+liveCv.addEventListener('mouseup', (e) => { e.preventDefault(); sendLive({ t: 'mouse', type: 'up', ...lpos(e), button: e.button, buttons: e.buttons, detail: e.detail }); });
+liveCv.addEventListener('wheel', (e) => { e.preventDefault(); const k = e.deltaMode === 1 ? 40 : 1; sendLive({ t: 'wheel', ...lpos(e), dx: e.deltaX * k, dy: e.deltaY * k }); }, { passive: false });
+liveCv.addEventListener('contextmenu', (e) => e.preventDefault());
+liveCv.addEventListener('focus', () => { for (const k in keys) keys[k] = false; }); // don't keep walking while typing
+function liveKey(e, down) {
+  e.stopPropagation(); // typing must not move the character / toggle the light / open chat
+  if (e.key === 'Escape') { if (down) { liveCv.blur(); if (controlsOpen) closeControls(); } return; }
+  if (e.isComposing) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') return; // pasting is handled by the paste event
+  e.preventDefault();
+  sendLive({ t: 'key', down, key: e.key, code: e.code, keyCode: e.keyCode, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey });
+}
+liveCv.addEventListener('keydown', (e) => liveKey(e, true));
+liveCv.addEventListener('keyup', (e) => liveKey(e, false));
+liveCv.addEventListener('paste', (e) => { e.preventDefault(); const t = e.clipboardData && e.clipboardData.getData('text'); if (t) sendLive({ t: 'text', text: t }); });
+
 function webSrc(u) {
   try { const a = new URL(u); return '/web/' + a.protocol.slice(0, -1) + '/' + a.host + a.pathname + a.search + a.hash; } catch (e) { return 'about:blank'; }
 }
 function applyWeb(w) {
   if (!w || !w.url) return;
+  const mode = w.mode === 'live' ? 'live' : 'proxy';
   tvOn = true; _pt.dirty = true;
   tv.style.display = 'block';
   screen.material = holeMat;
   quiet();
   showKind('web'); // pauses YouTube / video files
-  if (webCur === w.url) return;
-  webCur = w.url; webTitle = '';
-  webFrame.src = webSrc(w.url);
+  if (webCur === w.url && webMode === mode) return;
+  webMode = mode; webCur = w.url; webTitle = '';
+  liveCv.style.display = mode === 'live' ? 'block' : 'none';
+  webFrame.style.display = mode === 'live' ? 'none' : 'block';
+  webFrame.src = mode === 'live' ? 'about:blank' : webSrc(w.url);
 }
 socket.on('web', applyWeb);
 addEventListener('message', (e) => { // the page inside the TV reports where it is
   const d = e.data;
-  if (!d || !d.rmweb || e.source !== webFrame.contentWindow || activeKind !== 'web') return;
+  if (!d || !d.rmweb || e.source !== webFrame.contentWindow || activeKind !== 'web' || webMode === 'live') return;
   if (d.esc) { if (controlsOpen) closeControls(); return; }
   if (d.title != null) webTitle = String(d.title).slice(0, 200);
   if (typeof d.url === 'string' && /^https?:\/\//i.test(d.url) && d.url !== webCur) {
@@ -1489,7 +1548,10 @@ addEventListener('message', (e) => { // the page inside the TV reports where it 
     socket.emit('web-nav', { url: d.url }); // everyone else in the room follows the link
   }
 });
-function webCmd(c) { try { webFrame.contentWindow.postMessage({ rmcmd: c }, '*'); } catch (e) {} }
+function webCmd(c) {
+  if (webMode === 'live') return socket.emit('live-cmd', { c });
+  try { webFrame.contentWindow.postMessage({ rmcmd: c }, '*'); } catch (e) {}
+}
 function toWebUrl(raw) { // what was typed -> a full url (or a Google search)
   if (/^https?:\/\//i.test(raw)) return raw;
   if (!/\s/.test(raw) && /^[\w-]+(\.[\w-]+)+(:\d+)?([\/?#]\S*)?$/.test(raw)) return 'https://' + raw;
@@ -1536,7 +1598,8 @@ function showKind(kind) { // switch the TV between the YouTube iframe and the vi
   }
   if (ifr) ifr.style.display = kind === 'yt' ? 'block' : 'none';
   fv.style.display = kind === 'file' ? 'block' : 'none';
-  webFrame.style.display = kind === 'web' ? 'block' : 'none';
+  webFrame.style.display = kind === 'web' && webMode !== 'live' ? 'block' : 'none';
+  liveCv.style.display = kind === 'web' && webMode === 'live' ? 'block' : 'none';
   if (kind !== 'web' && webCur) { webFrame.src = 'about:blank'; webCur = null; } // stop the page (and its sound)
   player = kind === 'yt' ? ytPlayer : fileAdapter;
   playerReady = kind === 'yt' ? ytPlayerReady : kind === 'file';
@@ -1715,14 +1778,24 @@ $('loadBtn').onclick = () => {
     try { title = decodeURIComponent(u.pathname.split('/').pop() || '') || u.hostname; } catch (e) { title = u.hostname; }
     socket.emit('video-load', { kind: 'file', url: u.href, title });
   } else {
-    socket.emit('web-load', { url: toWebUrl(raw) });
+    socket.emit('web-load', { url: toWebUrl(raw), mode: curMode() });
   }
   $('url').value = ''; $('url').blur();
 };
 $('wBack').onclick = () => { webCmd('back'); $('wBack').blur(); };
 $('wFwd').onclick = () => { webCmd('forward'); $('wFwd').blur(); };
 $('wReload').onclick = () => { webCmd('reload'); $('wReload').blur(); };
-$('wHome').onclick = () => { socket.emit('web-load', { url: HOME_URL }); $('wHome').blur(); };
+$('wHome').onclick = () => { socket.emit('web-load', { url: HOME_URL, mode: curMode() }); $('wHome').blur(); };
+$('modeBtn').onclick = () => {
+  if (!liveOk) alert('The live browser is not installed on this server, so the TV uses the light proxy (LITE). See the README to enable LIVE.');
+  else {
+    wantLive = !wantLive;
+    try { localStorage.setItem('rm_live', wantLive ? '1' : '0'); } catch (e) {}
+    if (activeKind === 'web' && webCur) socket.emit('web-load', { url: webCur, mode: curMode() }); // reopen the same page in the other mode
+  }
+  refreshMode(); $('modeBtn').blur();
+};
+refreshMode();
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadBtn').click(); });
 $('closeBtn').onclick = closeControls;
 $('tvBtn').onclick = () => (controlsOpen ? closeControls() : openControls());
