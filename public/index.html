@@ -87,6 +87,11 @@
   .load input:focus { outline: none; border-color: #6a2a26; }
   .load button { padding: 0 14px; font-size: 12px; letter-spacing: 2px; }
   .deck.idle .transport, .deck.idle .seekwrap { opacity: .35; pointer-events: none; }
+  .webnav { display: none; align-items: center; gap: 6px; }
+  .webnav button { width: auto; min-width: 38px; padding: 0 9px; font-size: 14px; }
+  .webnav #wHome { font-size: 11px; letter-spacing: 1px; }
+  .deck.web .webnav { display: flex; }
+  .deck.web .transport, .deck.web .vol, .deck.web .seekwrap { display: none; }
   .rng { -webkit-appearance: none; appearance: none; flex: 1; height: 20px; margin: 0; background: transparent; cursor: pointer; --p: 0%; --b: 0%; }
   .rng:focus { outline: none; }
   .rng::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
@@ -133,7 +138,10 @@
 
   #tv { position: fixed; left: 0; top: 0; width: 812px; height: 452px; transform-origin: 0 0; will-change: transform;
         z-index: 1; background: #000; display: none; }
+  #tv { overflow: hidden; }
   #tv iframe { width: 100%; height: 100%; border: 0; }
+  /* websites render at a desktop size (1280 wide) and are scaled down onto the 812x452 TV */
+  #tv iframe#web { position: absolute; left: 0; top: 0; width: 1280px; height: 713px; transform: scale(.634375); transform-origin: 0 0; background: #fff; display: none; }
   #tv video { width: 100%; height: 100%; background: #000; display: none; object-fit: contain; }
 </style>
 </head>
@@ -162,7 +170,7 @@
   <div class="deck-top">
     <span class="rec"></span>
     <span id="deckState" class="state">NO TAPE</span>
-    <span id="deckTitle" class="deck-title">Paste a YouTube or video link below to load a tape</span>
+    <span id="deckTitle" class="deck-title">Paste a YouTube or video link, a website, or search Google below</span>
     <button id="closeBtn" class="ibtn" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6.4 4.9 12 10.6l5.6-5.7 1.5 1.5-5.7 5.6 5.7 5.6-1.5 1.5-5.6-5.7-5.6 5.7-1.5-1.5 5.7-5.6-5.7-5.6z"/></svg></button>
   </div>
   <div class="seekwrap">
@@ -180,8 +188,14 @@
       <button id="muteBtn" class="ibtn" title="Mute (M)" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9z"/><path class="i-w" d="M15.5 8.5a5 5 0 0 1 0 7l-1.4-1.4a3 3 0 0 0 0-4.2zM18.3 5.7a9 9 0 0 1 0 12.6l-1.4-1.4a7 7 0 0 0 0-9.8z"/><path class="i-x" d="m15 9.4 1.4-1.4 2.1 2.1 2.1-2.1L22 9.4l-2.1 2.1L22 13.6l-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1z"/></svg></button>
       <input type="range" id="vol" class="rng" min="0" max="100" step="1" value="80" aria-label="Volume">
     </div>
+    <div class="webnav">
+      <button id="wBack" class="ibtn" title="Back" aria-label="Back">&larr;</button>
+      <button id="wFwd" class="ibtn" title="Forward" aria-label="Forward">&rarr;</button>
+      <button id="wReload" class="ibtn" title="Reload" aria-label="Reload">&#8635;</button>
+      <button id="wHome" class="ibtn" title="Google">GOOGLE</button>
+    </div>
     <div class="load">
-      <input type="text" id="url" placeholder="Paste a YouTube or video link" autocomplete="off">
+      <input type="text" id="url" placeholder="YouTube / video link, website, or search Google" autocomplete="off">
       <button id="loadBtn">LOAD</button>
     </div>
   </div>
@@ -1442,6 +1456,46 @@ function onYouTubeIframeAPIReady() { ytReady = true; if (pending) applyVideo(pen
 
 function quiet() { suppressUntil = Date.now() + 800; } // ignore player events we caused ourselves
 
+// ----- websites on the TV: pages are loaded through the server's /web proxy (see webproxy.js) -----
+const SEARCH_URL = 'https://www.google.com/search?q=';
+const HOME_URL = 'https://www.google.com/';
+const webFrame = document.createElement('iframe');
+webFrame.id = 'web';
+webFrame.setAttribute('sandbox', 'allow-scripts allow-forms'); // pages can never reach ROOMMATE itself
+tv.appendChild(webFrame);
+let webCur = null, webTitle = '';
+function webSrc(u) {
+  try { const a = new URL(u); return '/web/' + a.protocol.slice(0, -1) + '/' + a.host + a.pathname + a.search + a.hash; } catch (e) { return 'about:blank'; }
+}
+function applyWeb(w) {
+  if (!w || !w.url) return;
+  tvOn = true; _pt.dirty = true;
+  tv.style.display = 'block';
+  screen.material = holeMat;
+  quiet();
+  showKind('web'); // pauses YouTube / video files
+  if (webCur === w.url) return;
+  webCur = w.url; webTitle = '';
+  webFrame.src = webSrc(w.url);
+}
+socket.on('web', applyWeb);
+addEventListener('message', (e) => { // the page inside the TV reports where it is
+  const d = e.data;
+  if (!d || !d.rmweb || e.source !== webFrame.contentWindow || activeKind !== 'web') return;
+  if (d.esc) { if (controlsOpen) closeControls(); return; }
+  if (d.title != null) webTitle = String(d.title).slice(0, 200);
+  if (typeof d.url === 'string' && /^https?:\/\//i.test(d.url) && d.url !== webCur) {
+    webCur = d.url;
+    socket.emit('web-nav', { url: d.url }); // everyone else in the room follows the link
+  }
+});
+function webCmd(c) { try { webFrame.contentWindow.postMessage({ rmcmd: c }, '*'); } catch (e) {} }
+function toWebUrl(raw) { // what was typed -> a full url (or a Google search)
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!/\s/.test(raw) && /^[\w-]+(\.[\w-]+)+(:\d+)?([\/?#]\S*)?$/.test(raw)) return 'https://' + raw;
+  return SEARCH_URL + encodeURIComponent(raw);
+}
+
 // ----- direct video files (HTML5 <video>) behind the same interface the deck already uses for YouTube -----
 const fv = document.createElement('video');
 fv.playsInline = true; fv.preload = 'auto'; fv.setAttribute('playsinline', '');
@@ -1482,8 +1536,10 @@ function showKind(kind) { // switch the TV between the YouTube iframe and the vi
   }
   if (ifr) ifr.style.display = kind === 'yt' ? 'block' : 'none';
   fv.style.display = kind === 'file' ? 'block' : 'none';
+  webFrame.style.display = kind === 'web' ? 'block' : 'none';
+  if (kind !== 'web' && webCur) { webFrame.src = 'about:blank'; webCur = null; } // stop the page (and its sound)
   player = kind === 'yt' ? ytPlayer : fileAdapter;
-  playerReady = kind === 'yt' ? ytPlayerReady : true;
+  playerReady = kind === 'yt' ? ytPlayerReady : kind === 'file';
 }
 
 function loadFile(v) {
@@ -1603,12 +1659,20 @@ function seekTo(t) {
 }
 
 function refreshDeck() {
+  const web = activeKind === 'web' && !!webCur;
+  deck.classList.toggle('web', web);
+  if (web) {
+    deck.classList.remove('idle', 'playing'); playBtn.classList.remove('on');
+    stateEl.textContent = 'WEB';
+    titleEl.textContent = webTitle || webCur;
+    return;
+  }
   const has = !!(playerReady && currentVid);
   deck.classList.toggle('idle', !has);
   if (!has) {
     deck.classList.remove('playing'); playBtn.classList.remove('on');
     stateEl.textContent = tvOn ? 'LOADING' : 'NO TAPE';
-    if (!tvOn) titleEl.textContent = 'Paste a YouTube or video link below to load a tape';
+    if (!tvOn) titleEl.textContent = 'Paste a YouTube or video link, a website, or search Google below';
     return;
   }
   const st = player.getPlayerState(), playing = st === 1 || st === 3;
@@ -1643,14 +1707,22 @@ $('loadBtn').onclick = () => {
   if (id) { socket.emit('video-load', { kind: 'yt', id }); $('url').value = ''; $('url').blur(); return; }
   let u;
   try { u = new URL(raw); } catch (e) { u = null; }
-  if (!u || !/^https?:$/.test(u.protocol)) return alert('Paste a YouTube link or a direct video link (https://... .mp4 / .webm / .m3u8)');
-  if (u.protocol === 'http:' && location.protocol === 'https:') return alert('This site is on https, so the browser blocks http video links. Use an https link.');
-  // direct file: every viewer's browser loads it straight from the host (nothing goes through this server)
-  let title = 'video';
-  try { title = decodeURIComponent(u.pathname.split('/').pop() || '') || u.hostname; } catch (e) { title = u.hostname; }
-  socket.emit('video-load', { kind: 'file', url: u.href, title });
+  // a direct video file link plays in the TV's video player; anything else is a website / Google search
+  if (u && /^https?:$/.test(u.protocol) && /\.(mp4|webm|m3u8|ogv|ogg|mov|m4v)$/i.test(u.pathname)) {
+    if (u.protocol === 'http:' && location.protocol === 'https:') return alert('This site is on https, so the browser blocks http video links. Use an https link.');
+    // direct file: every viewer's browser loads it straight from the host (nothing goes through this server)
+    let title = 'video';
+    try { title = decodeURIComponent(u.pathname.split('/').pop() || '') || u.hostname; } catch (e) { title = u.hostname; }
+    socket.emit('video-load', { kind: 'file', url: u.href, title });
+  } else {
+    socket.emit('web-load', { url: toWebUrl(raw) });
+  }
   $('url').value = ''; $('url').blur();
 };
+$('wBack').onclick = () => { webCmd('back'); $('wBack').blur(); };
+$('wFwd').onclick = () => { webCmd('forward'); $('wFwd').blur(); };
+$('wReload').onclick = () => { webCmd('reload'); $('wReload').blur(); };
+$('wHome').onclick = () => { socket.emit('web-load', { url: HOME_URL }); $('wHome').blur(); };
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadBtn').click(); });
 $('closeBtn').onclick = closeControls;
 $('tvBtn').onclick = () => (controlsOpen ? closeControls() : openControls());
