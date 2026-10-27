@@ -125,10 +125,16 @@
   body.touch #chat { bottom: 164px; }
   body.touch.deck-open #chat { bottom: 176px; }
   body.touch input[type=text] { font-size: 16px; }
+  #jumpBtn { position: fixed; right: 26px; bottom: 40px; width: 78px; height: 78px; border-radius: 50%; z-index: 6; display: none;
+             background: rgba(10,14,17,.45); border: 1px solid #36424a; color: #c4cdd2; font-size: 12px; letter-spacing: 2px; touch-action: none; }
+  #jumpBtn:active { background: rgba(190,60,50,.45); border-color: #7a2d28; }
+  body.touch.in-room #jumpBtn { display: block; }
+  body.deck-open #jumpBtn { display: none !important; }
 
   #tv { position: fixed; left: 0; top: 0; width: 812px; height: 452px; transform-origin: 0 0; will-change: transform;
         z-index: 1; background: #000; display: none; }
   #tv iframe { width: 100%; height: 100%; border: 0; }
+  #tv video { width: 100%; height: 100%; background: #000; display: none; object-fit: contain; }
 </style>
 </head>
 <body>
@@ -156,7 +162,7 @@
   <div class="deck-top">
     <span class="rec"></span>
     <span id="deckState" class="state">NO TAPE</span>
-    <span id="deckTitle" class="deck-title">Paste a YouTube link below to load a tape</span>
+    <span id="deckTitle" class="deck-title">Paste a YouTube or video link below to load a tape</span>
     <button id="closeBtn" class="ibtn" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6.4 4.9 12 10.6l5.6-5.7 1.5 1.5-5.7 5.6 5.7 5.6-1.5 1.5-5.6-5.7-5.6 5.7-1.5-1.5 5.7-5.6-5.7-5.6z"/></svg></button>
   </div>
   <div class="seekwrap">
@@ -175,7 +181,7 @@
       <input type="range" id="vol" class="rng" min="0" max="100" step="1" value="80" aria-label="Volume">
     </div>
     <div class="load">
-      <input type="text" id="url" placeholder="Paste a YouTube link" autocomplete="off">
+      <input type="text" id="url" placeholder="Paste a YouTube or video link" autocomplete="off">
       <button id="loadBtn">LOAD</button>
     </div>
   </div>
@@ -190,6 +196,7 @@
 </div>
 
 <div id="joy"><div id="knob"></div></div>
+<button id="jumpBtn" aria-label="Jump">JUMP</button>
 <div id="vig"></div>
 <div id="cross"></div>
 <div id="prompt" class="prompt">E: TV controls</div>
@@ -199,6 +206,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -1202,7 +1210,7 @@ function refreshTones() {
   for (const id in remotes) setTone(remotes[id].mesh, ids.indexOf(id) % 2 ? 'white' : 'black');
 }
 function getRemote(id) {
-  if (!remotes[id]) { remotes[id] = { mesh: makePlayer(), x: 0, z: 3, ry: 0 }; refreshTones(); }
+  if (!remotes[id]) { remotes[id] = { mesh: makePlayer(), x: 0, y: 0, z: 3, ry: 0 }; refreshTones(); }
   return remotes[id];
 }
 socket.on('connect', refreshTones);
@@ -1282,6 +1290,10 @@ function lockMouse() {
 
 // ---------- input ----------
 const keys = {};
+let jumpQueued = false, vy = 0;
+const GRAVITY = 21, JUMP_V = 6.6, BED_TOP = 0.55;
+// height of whatever is under (x, z): the floor, or the top of the mattress
+function groundAt(x, z) { return (Math.abs(x) < 1.0 && Math.abs(z - BED_Z) < 0.45) ? BED_TOP : 0; }
 const joy = { x: 0, y: 0 };
 const typing = (e) => e.target && e.target.tagName === 'INPUT' && e.target.type === 'text';
 function deckKey(e, k) { // shortcuts while the TV controls are open
@@ -1300,6 +1312,7 @@ addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (controlsOpen && deckKey(e, k)) return;
+  if (k === ' ') { e.preventDefault(); if (!e.repeat) jumpQueued = true; return; }
   if (k === 'v') toggleCamera();
   else if (k === 'g') toggleSit();
   else if (k === 'f') toggleLight();
@@ -1323,7 +1336,7 @@ addEventListener('mousedown', (e) => {
   if (!joined || e.button !== 0) return;
   if (e.target.closest && e.target.closest('#chat')) return;
   if (chatOpen) closeChat();
-  if (e.target.closest && e.target.closest('.bar, .deck, #join, #tv, #joy')) return;
+  if (e.target.closest && e.target.closest('.bar, .deck, #join, #tv, #joy, #jumpBtn')) return;
   if (pickSwitch(e)) { toggleLight(); return; }          // click the light switch
   if (locked) { if (pickTV()) openControls(); }          // click on the TV while looking around
   else if (pickTV(e)) openControls();                    // click on the TV with the cursor
@@ -1334,16 +1347,16 @@ addEventListener('mousedown', (e) => {
 let lastSent = 0, lastSentPos = '';
 function sendPos(force) {
   if (!joined) return;
-  const s = `${me.position.x.toFixed(2)},${me.position.z.toFixed(2)},${me.rotation.y.toFixed(2)}`;
+  const s = `${me.position.x.toFixed(2)},${me.position.y.toFixed(2)},${me.position.z.toFixed(2)},${me.rotation.y.toFixed(2)}`;
   if (!force && s === lastSentPos) return;
   lastSentPos = s;
-  socket.emit('move', { x: me.position.x, z: me.position.z, ry: me.rotation.y });
+  socket.emit('move', { x: me.position.x, y: me.position.y, z: me.position.z, ry: me.rotation.y });
 }
 socket.on('player-joined', () => sendPos(true)); // tell the newcomer where I am
 socket.on('move', (p) => {
   const isNew = !remotes[p.id], r = getRemote(p.id);
-  r.x = p.x; r.z = p.z; r.ry = p.ry;
-  if (isNew) { r.mesh.position.set(p.x, 0, p.z); r.mesh.rotation.y = p.ry; } // appear where they are, don't slide in from the origin
+  r.x = p.x; r.y = p.y || 0; r.z = p.z; r.ry = p.ry;
+  if (isNew) { r.mesh.position.set(p.x, r.y, p.z); r.mesh.rotation.y = p.ry; } // appear where they are, don't slide in from the origin
 });
 socket.on('player-left', (id) => {
   if (remotes[id]) { disposePlayer(remotes[id].mesh); delete remotes[id]; refreshTones(); }
@@ -1422,37 +1435,108 @@ socket.on('player-left', () => addChatLine('', 'Someone left.', null, 'sys'));
 // ---------- YouTube on the TV ----------
 const tv = $('tv');
 let ytReady = false, player = null, playerReady = false, pending = null;
+let ytPlayer = null, ytPlayerReady = false, activeKind = 'yt', hls = null, fileTitle = '', fileStart = null;
 let suppressUntil = 0, currentVid = null, tvOn = false, dragging = false;
 
 function onYouTubeIframeAPIReady() { ytReady = true; if (pending) applyVideo(pending); }
 
 function quiet() { suppressUntil = Date.now() + 800; } // ignore player events we caused ourselves
 
+// ----- direct video files (HTML5 <video>) behind the same interface the deck already uses for YouTube -----
+const fv = document.createElement('video');
+fv.playsInline = true; fv.preload = 'auto'; fv.setAttribute('playsinline', '');
+tv.appendChild(fv);
+const fileAdapter = {
+  getCurrentTime: () => fv.currentTime || 0,
+  getDuration: () => (isFinite(fv.duration) ? fv.duration : 0),
+  getPlayerState: () => (fv.ended ? 0 : fv.readyState < 3 && !fv.paused ? 3 : fv.paused ? 2 : 1),
+  seekTo: (t) => { try { fv.currentTime = t; } catch (e) {} },
+  playVideo: () => { const p = fv.play(); if (p && p.catch) p.catch(() => { fv.muted = true; fv.play().catch(() => {}); }); },
+  pauseVideo: () => fv.pause(),
+  setVolume: (x) => { fv.volume = Math.max(0, Math.min(1, x / 100)); },
+  mute: () => { fv.muted = true; },
+  unMute: () => { fv.muted = false; },
+  getVideoData: () => ({ title: fileTitle }),
+  getVideoLoadedFraction: () => { const d = fv.duration; if (!d || !fv.buffered.length) return 0; return fv.buffered.end(fv.buffered.length - 1) / d; }
+};
+fv.addEventListener('play', () => { if (activeKind === 'file' && Date.now() >= suppressUntil) sendState(true, fv.currentTime); });
+fv.addEventListener('pause', () => { if (activeKind === 'file' && !fv.ended && Date.now() >= suppressUntil) sendState(false, fv.currentTime); });
+fv.addEventListener('loadedmetadata', () => {
+  if (activeKind !== 'file' || !fileStart) return;
+  const v = fileStart; fileStart = null;
+  quiet();
+  if (v.time) { try { fv.currentTime = v.time; } catch (e) {} }
+  if (v.playing) { fileAdapter.setVolume(volume); fv.muted = muted; fileAdapter.playVideo(); }
+});
+fv.addEventListener('error', () => {
+  if (activeKind !== 'file' || !fv.src) return;
+  alert('The TV could not play this video file (blocked, expired link, or unsupported format).');
+});
+
+function showKind(kind) { // switch the TV between the YouTube iframe and the video file element
+  const ifr = document.getElementById('yt');
+  if (activeKind !== kind) {
+    if (activeKind === 'yt') { try { if (ytPlayerReady) ytPlayer.pauseVideo(); } catch (e) {} }
+    else { fv.pause(); }
+    activeKind = kind; currentVid = null; titleVid = null;
+  }
+  if (ifr) ifr.style.display = kind === 'yt' ? 'block' : 'none';
+  fv.style.display = kind === 'file' ? 'block' : 'none';
+  player = kind === 'yt' ? ytPlayer : fileAdapter;
+  playerReady = kind === 'yt' ? ytPlayerReady : true;
+}
+
+function loadFile(v) {
+  currentVid = v.url; fileTitle = v.title || 'video'; titleVid = null;
+  fileStart = { time: v.time || 0, playing: v.playing };
+  if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+  fv.removeAttribute('src'); fv.load();
+  if (/\.m3u8(\?|#|$)/i.test(v.url) && window.Hls && Hls.isSupported()) {
+    hls = new Hls(); hls.loadSource(v.url); hls.attachMedia(fv);
+  } else fv.src = v.url;
+}
+
 function applyVideo(v) {
-  if (!ytReady || (player && !playerReady)) { pending = v; return; }
+  const kind = v.kind === 'file' ? 'file' : 'yt';
+  if (kind === 'yt' && (!ytReady || (ytPlayer && !ytPlayerReady))) { pending = v; return; }
   pending = null;
   tvOn = true; _pt.dirty = true;
   tv.style.display = 'block';
   screen.material = holeMat;
   quiet();
 
-  if (!player) {
-    currentVid = v.id;
-    player = new YT.Player('yt', {
-      width: '100%', height: '100%', videoId: v.id,
-      playerVars: { playsinline: 1, start: Math.floor(v.time || 0) },
-      events: {
-        onReady: (e) => { playerReady = true; applyVolume(); v.playing ? e.target.playVideo() : e.target.pauseVideo(); if (pending) applyVideo(pending); },
-        onStateChange: onPlayerState,
-        onError: (e) => alert('YouTube could not play this video (error ' + e.data + '). Some videos block embedding, try another.')
-      }
-    });
-    return;
-  }
-  if (currentVid !== v.id) {
-    currentVid = v.id;
-    v.playing ? player.loadVideoById(v.id, v.time || 0) : player.cueVideoById(v.id, v.time || 0);
-    return;
+  if (kind === 'file') {
+    showKind('file');
+    if (currentVid !== v.url) { loadFile(v); return; }
+  } else {
+    const vid = v.id;
+    if (!ytPlayer) {
+      if (activeKind === 'file') { fv.pause(); fv.style.display = 'none'; }
+      activeKind = 'yt'; currentVid = vid;
+      ytPlayer = new YT.Player('yt', {
+        width: '100%', height: '100%', videoId: vid,
+        playerVars: { playsinline: 1, start: Math.floor(v.time || 0) },
+        events: {
+          onReady: (e) => {
+            ytPlayerReady = true;
+            if (activeKind !== 'yt') return;
+            showKind('yt'); applyVolume();
+            v.playing ? e.target.playVideo() : e.target.pauseVideo();
+            if (pending) applyVideo(pending);
+          },
+          onStateChange: onPlayerState,
+          onError: (e) => alert('YouTube could not play this video (error ' + e.data + '). Some videos block embedding, try another.')
+        }
+      });
+      player = ytPlayer; playerReady = false;
+      return;
+    }
+    showKind('yt');
+    if (currentVid !== vid) {
+      currentVid = vid;
+      v.playing ? ytPlayer.loadVideoById(vid, v.time || 0) : ytPlayer.cueVideoById(vid, v.time || 0);
+      return;
+    }
   }
   if (Math.abs(player.getCurrentTime() - v.time) > (v.playing ? 1.5 : 0.3)) player.seekTo(v.time, true);
   v.playing ? player.playVideo() : player.pauseVideo();
@@ -1460,7 +1544,7 @@ function applyVideo(v) {
 
 // YouTube's own controls on the TV still sync too
 function onPlayerState(e) {
-  if (Date.now() < suppressUntil) return;
+  if (activeKind !== 'yt' || Date.now() < suppressUntil) return;
   if (e.data === 1) sendState(true, player.getCurrentTime());
   else if (e.data === 2) sendState(false, player.getCurrentTime());
 }
@@ -1524,7 +1608,7 @@ function refreshDeck() {
   if (!has) {
     deck.classList.remove('playing'); playBtn.classList.remove('on');
     stateEl.textContent = tvOn ? 'LOADING' : 'NO TAPE';
-    if (!tvOn) titleEl.textContent = 'Paste a YouTube link below to load a tape';
+    if (!tvOn) titleEl.textContent = 'Paste a YouTube or video link below to load a tape';
     return;
   }
   const st = player.getPlayerState(), playing = st === 1 || st === 3;
@@ -1552,11 +1636,24 @@ seekEl.addEventListener('input', () => {
   setRange(seekEl, v / m * 100); curLbl.textContent = fmt(v);
 });
 seekEl.addEventListener('change', () => { dragging = false; seekTo(parseFloat(seekEl.value)); seekEl.blur(); });
-$('loadBtn').onclick = () => {
-  const id = youtubeId($('url').value.trim());
-  if (!id) return alert('Could not read that YouTube link');
-  socket.emit('video-load', id);
-  $('url').value = ''; $('url').blur();
+$('loadBtn').onclick = async () => {
+  const raw = $('url').value.trim();
+  if (!raw) return;
+  const id = youtubeId(raw);
+  if (id) { socket.emit('video-load', { kind: 'yt', id }); $('url').value = ''; $('url').blur(); return; }
+  if (!/^https?:\/\//i.test(raw)) return alert('Paste a YouTube link or a video / download link (https://...)');
+  const btn = $('loadBtn'); btn.disabled = true; btn.textContent = '...';
+  try {
+    const r = await fetch('/api/resolve?url=' + encodeURIComponent(raw));
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'Could not resolve link');
+    // mp4/webm go through the server proxy (no CORS / hotlink trouble, seeking works); HLS playlists load directly
+    const url = j.type === 'hls' ? j.url : '/proxy?u=' + encodeURIComponent(j.url);
+    socket.emit('video-load', { kind: 'file', url, title: j.title });
+    $('url').value = ''; $('url').blur();
+  } catch (err) {
+    alert('Could not load that link: ' + err.message);
+  } finally { btn.disabled = false; btn.textContent = 'LOAD'; }
 };
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loadBtn').click(); });
 $('closeBtn').onclick = closeControls;
@@ -1635,8 +1732,8 @@ $('joinBtn').onclick = () => {
   sendPos(true);
   try { chatBC = new BroadcastChannel('roommate-chat-' + code); chatBC.onmessage = (ev) => receiveChat(ev.data); } catch (e) { chatBC = null; }
   addChatLine('', 'You are not alone in here.', null, 'sys');
-  helpEl.textContent = IS_TOUCH ? 'Left stick: move   Drag: look   Tap the TV or the switch   Sit button near the chairs'
-                                : 'Click to look around   WASD move   V camera   E TV   F light   G sit   T chat';
+  helpEl.textContent = IS_TOUCH ? 'Left stick: move   JUMP button   Drag: look   Tap the TV or the switch   Sit button near the chairs'
+                                : 'Click to look around   WASD move   SPACE jump   V camera   E TV   F light   G sit   T chat';
   helpEl.classList.add('show'); setTimeout(() => helpEl.classList.remove('show'), 9000);
 };
 
@@ -1663,7 +1760,7 @@ if (IS_TOUCH) {
   let lookId = null, lx = 0, ly = 0;
   addEventListener('pointerdown', (e) => {
     if (e.pointerType !== 'touch' || lookId !== null || !joined) return;
-    if (e.target.closest && e.target.closest('.bar, .deck, #chat, #joy, #tv, #join')) return;
+    if (e.target.closest && e.target.closest('.bar, .deck, #chat, #joy, #jumpBtn, #tv, #join')) return;
     lookId = e.pointerId; lx = e.clientX; ly = e.clientY;
   });
   addEventListener('pointermove', (e) => {
@@ -1673,6 +1770,8 @@ if (IS_TOUCH) {
   const endLook = (e) => { if (e.pointerId === lookId) lookId = null; };
   addEventListener('pointerup', endLook); addEventListener('pointercancel', endLook);
 }
+
+$('jumpBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (joined && !chatOpen) jumpQueued = true; });
 
 // ---------- sitting (other players see it automatically: a player standing on a seat spot is drawn seated) ----------
 let seatIdx = -1;
@@ -1685,10 +1784,10 @@ function nearestFreeChair() {
 }
 function sitDown() {
   const i = nearestFreeChair(); if (i < 0) return;
-  seatIdx = i; me.position.set(CHAIRS[i].x, 0, CHAIRS[i].z + SEAT_DZ); me.rotation.y = Math.PI;
+  seatIdx = i; vy = 0; me.position.set(CHAIRS[i].x, 0, CHAIRS[i].z + SEAT_DZ); me.rotation.y = Math.PI;
   yaw = 0; pitch = -0.12; sendPos(true);
 }
-function standUp() { const c = CHAIRS[seatIdx]; seatIdx = -1; me.position.set(c.x, 0, c.z - 0.95); sendPos(true); }
+function standUp() { const c = CHAIRS[seatIdx]; seatIdx = -1; vy = 0; me.position.set(c.x, 0, c.z - 0.95); sendPos(true); }
 function toggleSit() { if (seatIdx >= 0) standUp(); else sitDown(); if (sitBtn) sitBtn.blur(); }
 function pushOutOfChairs() {
   for (const c of CHAIRS) {
@@ -1740,8 +1839,24 @@ function loop(now) {
     dx /= len; dz /= len;
     me.position.x = Math.max(-5.3, Math.min(5.3, me.position.x + dx * 4 * dt));
     me.position.z = Math.max(-4.4, Math.min(5.3, me.position.z + dz * 4 * dt));
-    pushOutOfBed(); pushOutOfChairs();
+    if (me.position.y < 0.5) pushOutOfBed();
+    if (me.position.y < 0.45) pushOutOfChairs();
   }
+  // jumping / gravity
+  if (jumpQueued) {
+    jumpQueued = false;
+    if (seatIdx >= 0) standUp();
+    if (me.position.y <= groundAt(me.position.x, me.position.z) + 0.02) vy = JUMP_V;
+  }
+  if (seatIdx < 0) {
+    const g0 = groundAt(me.position.x, me.position.z);
+    if (vy !== 0 || me.position.y > g0 + 0.001) {
+      vy -= GRAVITY * dt;
+      me.position.y += vy * dt;
+      if (me.position.y <= g0 && vy <= 0) { me.position.y = g0; vy = 0; }
+    } else me.position.y = g0;
+  }
+  const grounded = me.position.y <= groundAt(me.position.x, me.position.z) + 0.02;
   if (seatIdx >= 0) me.rotation.y = Math.PI;
   else if (mode === 'first') me.rotation.y = yaw + Math.PI;                       // body follows where you look
   else if (moving) me.rotation.y += angDiff(me.rotation.y, Math.atan2(dx, dz)) * (1 - Math.exp(-dt * 14));
@@ -1753,11 +1868,12 @@ function loop(now) {
     const rm = Math.hypot(r.x - r.mesh.position.x, r.z - r.mesh.position.z) > 0.02;
     r.mesh.position.x += (r.x - r.mesh.position.x) * ra;
     r.mesh.position.z += (r.z - r.mesh.position.z) * ra;
+    r.mesh.position.y += ((r.y || 0) - r.mesh.position.y) * ra;
     r.mesh.rotation.y += angDiff(r.mesh.rotation.y, r.ry) * ra;
     const sr = CHAIRS.some((c) => Math.hypot(r.mesh.position.x - c.x, r.mesh.position.z - (c.z + SEAT_DZ)) < 0.1);
     animateChar(r.mesh, rm && !sr, ts, sr);
   }
-  animateChar(me, moving, ts, seatIdx >= 0);
+  animateChar(me, moving && grounded, ts, seatIdx >= 0);
 
   animateEnvironment(ts);
   updateCamera(dt);
