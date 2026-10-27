@@ -16,7 +16,26 @@ app.use(express.static(path.join(__dirname, 'public')));
 // roomCode -> { kind: 'yt'|'file', id | url, title, playing, time, updatedAt }
 const videos = {};
 const lights = {}; // roomCode -> boolean (false = off)
-const webs = {};   // roomCode -> url of the website on the TV (replaces any video)
+const webs = {};   // roomCode -> { url, mode: 'live' | 'proxy' } website on the TV (replaces any video)
+const live = require('./livebrowser')(io, {
+  isPrivateIp: require('./webproxy').isPrivateIp,
+  onUrl: (room, url) => { if (webs[room] && webs[room].mode === 'live') webs[room].url = url; },
+  onBroken: () => io.emit('caps', { live: false }) // Chromium would not start: everyone falls back to the light proxy
+});
+
+// show a website on the TV: 'live' = real Chromium on the server (if installed), else the light proxy
+async function showWeb(room, url, wantLive) {
+  delete videos[room];
+  const mode = wantLive && live.available() ? 'live' : 'proxy';
+  webs[room] = { url, mode };
+  io.to(room).emit('web', webs[room]);
+  if (mode !== 'live') return live.stop(room);
+  const ok = await live.load(room, url);
+  if (!ok && webs[room] && webs[room].url === url && webs[room].mode === 'live') {
+    webs[room] = { url, mode: 'proxy' };
+    io.to(room).emit('web', webs[room]);
+  }
+}
 
 function cleanWeb(p) {
   const u = String((p && p.url) || '').trim();
@@ -38,6 +57,7 @@ function cleanVideo(v) {
 }
 
 io.on('connection', (socket) => {
+  socket.emit('caps', { live: live.available() });
   socket.on('join', (code) => {
     code = String(code || '').toUpperCase().trim().slice(0, 8);
     if (!code) return;
@@ -55,7 +75,8 @@ io.on('connection', (socket) => {
       const time = v.playing ? v.time + (Date.now() - v.updatedAt) / 1000 : v.time;
       socket.emit('video', { kind: v.kind, id: v.id, url: v.url, title: v.title, playing: v.playing, time });
     } else if (webs[code]) {
-      socket.emit('web', { url: webs[code] });
+      socket.emit('web', webs[code]);
+      if (webs[code].mode === 'live') live.join(code, socket, webs[code].url);
     }
   });
 
@@ -85,25 +106,26 @@ io.on('connection', (socket) => {
     if (!c) return;
     videos[socket.room] = { ...c, playing: true, time: 0, updatedAt: Date.now() };
     delete webs[socket.room];
+    live.stop(socket.room);
     io.to(socket.room).emit('video', { ...c, playing: true, time: 0 });
   });
 
-  // website on the TV: 'web-load' = typed in the deck (everyone, incl. sender); 'web-nav' = someone
-  // clicked a link on the page (everyone else follows)
+  // website on the TV. 'web-load' = typed in the deck (everyone sees it); 'web-nav' = someone clicked a
+  // link on a LITE (proxy) page, everyone else follows. In LIVE mode there is one shared browser, so no sync is needed.
   socket.on('web-load', (p) => {
     if (!socket.room) return;
     const url = cleanWeb(p);
-    if (!url) return;
-    webs[socket.room] = url; delete videos[socket.room];
-    io.to(socket.room).emit('web', { url });
+    if (url) showWeb(socket.room, url, !!(p && p.mode === 'live'));
   });
   socket.on('web-nav', (p) => {
-    if (!socket.room) return;
+    if (!socket.room || (webs[socket.room] && webs[socket.room].mode === 'live')) return;
     const url = cleanWeb(p);
     if (!url) return;
-    webs[socket.room] = url; delete videos[socket.room];
-    socket.to(socket.room).emit('web', { url });
+    webs[socket.room] = { url, mode: 'proxy' }; delete videos[socket.room];
+    socket.to(socket.room).emit('web', webs[socket.room]);
   });
+  socket.on('live-input', (e) => { if (socket.room) live.input(socket.room, e); });
+  socket.on('live-cmd', (p) => { if (socket.room && p) live.cmd(socket.room, String(p.c)); });
 
   socket.on('video-state', (s) => {
     const v = videos[socket.room];
