@@ -7,6 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+require('./webproxy')(app); // /web/... lets the TV open any website (must come before static)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------------------------------------------------------------------
@@ -15,6 +16,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // roomCode -> { kind: 'yt'|'file', id | url, title, playing, time, updatedAt }
 const videos = {};
 const lights = {}; // roomCode -> boolean (false = off)
+const webs = {};   // roomCode -> url of the website on the TV (replaces any video)
+
+function cleanWeb(p) {
+  const u = String((p && p.url) || '').trim();
+  if (!u || u.length > 2000) return null;
+  try { const a = new URL(u); return /^https?:$/.test(a.protocol) ? a.href : null; } catch (e) { return null; }
+}
 
 function cleanVideo(v) {
   if (typeof v === 'string') v = { kind: 'yt', id: v }; // old clients
@@ -46,6 +54,8 @@ io.on('connection', (socket) => {
     if (v) {
       const time = v.playing ? v.time + (Date.now() - v.updatedAt) / 1000 : v.time;
       socket.emit('video', { kind: v.kind, id: v.id, url: v.url, title: v.title, playing: v.playing, time });
+    } else if (webs[code]) {
+      socket.emit('web', { url: webs[code] });
     }
   });
 
@@ -74,7 +84,25 @@ io.on('connection', (socket) => {
     const c = cleanVideo(payload);
     if (!c) return;
     videos[socket.room] = { ...c, playing: true, time: 0, updatedAt: Date.now() };
+    delete webs[socket.room];
     io.to(socket.room).emit('video', { ...c, playing: true, time: 0 });
+  });
+
+  // website on the TV: 'web-load' = typed in the deck (everyone, incl. sender); 'web-nav' = someone
+  // clicked a link on the page (everyone else follows)
+  socket.on('web-load', (p) => {
+    if (!socket.room) return;
+    const url = cleanWeb(p);
+    if (!url) return;
+    webs[socket.room] = url; delete videos[socket.room];
+    io.to(socket.room).emit('web', { url });
+  });
+  socket.on('web-nav', (p) => {
+    if (!socket.room) return;
+    const url = cleanWeb(p);
+    if (!url) return;
+    webs[socket.room] = url; delete videos[socket.room];
+    socket.to(socket.room).emit('web', { url });
   });
 
   socket.on('video-state', (s) => {
